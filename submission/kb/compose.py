@@ -23,14 +23,24 @@ _PRODUCT_LABEL = {
 }
 _BANNED = re.compile(r"in these facts|context|would you like", re.I)
 _SPLIT = re.compile(r"(?<=[.!?])\s+")
-_ABBR_END = re.compile(r"(?:\b[ap]\.m|\b(?:St|Ave|Blvd|Rd|Dr|Ste|Mt|Ft|Mr|Mrs|Ms|Jr|Sr|Inc|No|Hwy))\.$", re.I)
+_AMPM_END = re.compile(r"\b[ap]\.m\.$", re.I)
+_ABBR_END = re.compile(r"\b(?:St|Ave|Blvd|Rd|Dr|Ste|Mt|Ft|Mr|Mrs|Ms|Jr|Sr|Hwy)\.$")
+_DAY_START = re.compile(r"(?:mon|tue|wed|thu|fri|sat|sun)", re.I)
+
+
+def _continues(prev: str, nxt: str) -> bool:
+    """True when the period ending `prev` is an abbreviation dot, not a sentence end."""
+    if _AMPM_END.search(prev):
+        return bool(nxt) and (nxt[0] in "-\u2013\u2014" or nxt[0].isdigit() or nxt[0].islower()
+                              or bool(_DAY_START.match(nxt)))
+    return bool(_ABBR_END.search(prev)) and bool(nxt) and (nxt[0].isupper() or nxt[0].isdigit())
 
 
 def _sentences(text: str) -> list[str]:
     """Split into sentences without breaking inside abbreviations like "a.m." or "St."."""
     out: list[str] = []
     for part in _SPLIT.split(text):
-        if out and _ABBR_END.search(out[-1]):
+        if out and _continues(out[-1], part):
             out[-1] += " " + part
         else:
             out.append(part)

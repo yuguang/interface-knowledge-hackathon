@@ -138,3 +138,14 @@ def test_sanitize_does_not_split_abbreviations():
     assert sanitize(Answer(t), {"8:30 a.m.", "5:00 p.m."}, {"9:00"}).text == t
     t = "Visit 123 Main St. Dubuque for help."
     assert sanitize(Answer(t), set(), {"$9"}).text == t
+
+
+def test_sanitize_ampm_sentence_end_still_drops_stale():
+    t = "The 60-month rate is 5.39% at the branch open until 5 p.m. It was 5.34% before."
+    out = sanitize(Answer(t), {"5.39%"}, {"5.34%"}).text
+    assert "5.34" not in out and "5.39%" in out
+
+
+def test_sanitize_splits_after_no():
+    out = sanitize(Answer("Is there a fee? No. The fee is $5."), set(), {"$5"}).text
+    assert "$5" not in out and "No." in out
