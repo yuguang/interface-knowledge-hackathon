@@ -22,7 +22,19 @@ _PRODUCT_LABEL = {
     "org": "Dupaco", "program": "program",
 }
 _BANNED = re.compile(r"in these facts|context|would you like", re.I)
-_SENT = re.compile(r"(?<=[.!?])\s+")
+_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_ABBR_END = re.compile(r"(?:\b[ap]\.m|\b(?:St|Ave|Blvd|Rd|Dr|Ste|Mt|Ft|Mr|Mrs|Ms|Jr|Sr|Inc|No|Hwy))\.$", re.I)
+
+
+def _sentences(text: str) -> list[str]:
+    """Split into sentences without breaking inside abbreviations like "a.m." or "St."."""
+    out: list[str] = []
+    for part in _SPLIT.split(text):
+        if out and _ABBR_END.search(out[-1]):
+            out[-1] += " " + part
+        else:
+            out.append(part)
+    return out
 _STOP = frozenset("a an and are as at be by can do does for from has have how i in is it its me my of on or our "
                   "that the their there this to was what when where which who will with you your dupaco".split())
 
@@ -109,7 +121,7 @@ _PROSE_SYSTEM = (
 
 def _clean_prose(text: str) -> str:
     """Drop questions and banned-phrase sentences from model output."""
-    sents = [s for s in _SENT.split(text.strip()) if s and not s.rstrip().endswith("?") and not _BANNED.search(s)]
+    sents = [s for s in _sentences(text.strip()) if s and not s.rstrip().endswith("?") and not _BANNED.search(s)]
     return " ".join(sents).strip()
 
 
@@ -118,9 +130,10 @@ def _words(s: str) -> set[str]:
 
 
 def _extractive(question: str, text: str, limit: int = 400) -> str:
-    sents = [s.strip() for s in _SENT.split(" ".join(text.split())) if s.strip()]
+    sents = [s.strip() for s in _sentences(" ".join(text.split())) if s.strip()
+             and not s.rstrip().endswith("?") and not _BANNED.search(s)]
     if not sents:
-        return text[:limit]
+        return ""
     qw = _words(question)
     scores = [len(qw & _words(s)) for s in sents]
     best = max(scores)
@@ -143,7 +156,9 @@ def render_prose(question: str, intent: Intent, hits: list[Hit], snapshot_id: st
     if out and out.strip() != "NONE":
         text = _clean_prose(out)
     if not text:
-        text = _clean_prose(_extractive(question, top.text)) or _extractive(question, top.text)
+        text = _extractive(question, top.text)
+        if not text:
+            return refusal(question)
     return Answer(text=text, sources=[Source(top.url, snapshot_id, top.text[:200])])
 
 
@@ -157,7 +172,7 @@ def sanitize(answer: Answer, keep: set[str], drop: set[str]) -> Answer:
     out = []
     for line in answer.text.split("\n"):
         kept = []
-        for s in _SENT.split(line):
+        for s in _sentences(line):
             n = _numbers(s)
             if _BANNED.search(s) or (n & drop_n and not n & keep_n):
                 continue

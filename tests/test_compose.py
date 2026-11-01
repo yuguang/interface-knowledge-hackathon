@@ -119,3 +119,22 @@ def test_no_question_back():
 def test_prose_llm_leaking_phrase_falls_back():
     a = render_prose(PI.cleaned_question, PI, [HIT], SID, FakeLLM("In these facts, checking is free."))
     assert "in these facts" not in a.text.lower()
+
+
+def test_extractive_skips_faq_question_sentences():
+    h = Hit(2, "https://www.dupaco.com/faq", "FAQ", "How do I open a checking account? Visit any branch with ID.", 1.0, SID)
+    a = render_prose("How do I open a checking account?", PI, [h], SID, NoLLM())
+    assert "?" not in a.text and "Visit any branch" in a.text
+
+
+def test_extractive_only_questions_refuses():
+    h = Hit(3, "https://www.dupaco.com/faq", "FAQ", "How do I open a checking account?", 1.0, SID)
+    a = render_prose("How do I open a checking account?", PI, [h], SID, NoLLM())
+    assert not a.confident and not _numbers(a.text)
+
+
+def test_sanitize_does_not_split_abbreviations():
+    t = "Lobby hours are 8:30 a.m. - 5:00 p.m. Monday-Friday."
+    assert sanitize(Answer(t), {"8:30 a.m.", "5:00 p.m."}, {"9:00"}).text == t
+    t = "Visit 123 Main St. Dubuque for help."
+    assert sanitize(Answer(t), set(), {"$9"}).text == t
