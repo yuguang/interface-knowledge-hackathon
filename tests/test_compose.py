@@ -294,3 +294,29 @@ def test_prose_meta_lead_in_is_not_a_disclaimer():
     out = "Based on the sections provided, the locator is at https://www.dupaco.com/contact. It lists every branch."
     a = render_prose("Branch locator URL?", PI, [HIT], SID, FakeLLM(out))
     assert a.confident and "dupaco.com/contact" in a.text
+
+
+def test_prose_section_links_rank_by_question_not_page_order():
+    """Nav links come first in page order and short anchors match inside many sections; the asked link must survive
+    the cap. Anchors match as whole words only."""
+    llm = FakeLLM("ok")
+    nav = [(w, f"https://www.dupaco.com/{w.lower()}") for w in
+           ("Rates", "Loans", "Savings", "Checking", "Cards", "Insurance", "Business", "Learn", "About", "Careers",
+            "Contact", "Apply")]
+    text = ("Rates, Loans, Savings, Checking, Cards, Insurance, Business, Learn, About, Careers, Contact and Apply "
+            "menus.\nReady to join? Become a member online. Joining is easy.")
+    h = Hit(5, "https://www.dupaco.com/about/join", "Join", text, 1.0, SID)
+    links = {h.url: nav + [("Join", "https://www.dupaco.com/join-nav"),
+                           ("Become a member", "https://join.dupaco.com/")]}
+    render_prose("How do I become a member online?", PI, [h], SID, llm, links=links)
+    user = llm.calls[0][1]
+    assert "Become a member: https://join.dupaco.com/" in user
+    assert "join-nav" not in user  # "Join" is no whole word of the section ("join?" differs in case, "Joining" is longer)
+    assert user.count("https://www.dupaco.com/") <= compose.MAX_SECTION_LINKS + 1
+
+
+@pytest.mark.parametrize("out, refused", [("Annual fee: NONE.", False), ("No fee applies. NONE", True),
+                                          ("NONE", True)])
+def test_prose_none_only_as_whole_or_separate_trailing_sentence(out, refused):
+    a = render_prose("Annual fee?", PI, [HIT], SID, FakeLLM(out))
+    assert (not a.confident) is refused

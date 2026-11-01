@@ -220,14 +220,20 @@ _PROSE_SYSTEM = (
 _DISCLAIMER = re.compile(r"\b(?:sections?|provided (?:information|text)|information provided)\b[^.]*?"
                          r"\b(?:don't|do not|doesn't|does not|didn't)\s+(?:state|give|include|list|mention|say"
                          r"|specify|provide|contain|show)", re.I)
-_NONE_TOKEN = re.compile(r"(?:^|\s)NONE\.?\s*$")
+_NONE_TOKEN = re.compile(r"(?:^|[.!?]\s+|\n\s*)NONE\.?\s*$")  # NONE as its own trailing sentence, not "Fee: NONE."
 MAX_SECTION_LINKS = 8
 
 
-def _section(h: Hit, links: Optional[dict]) -> str:
-    """One section for the prose prompt: page URL and heading, text, then targets of links whose text it shows."""
+def _section(h: Hit, links: Optional[dict], question: str = "") -> str:
+    """One section for the prose prompt: page URL and heading, text, then targets of links whose text it shows as
+    whole words. Nav links come first in page order, so candidates rank by anchor overlap with the question
+    (page order breaks ties) before the cap."""
     flat = " ".join(h.text.split())
-    shown = [f"{t}: {href}" for t, href in (links or {}).get(h.url, []) if t in flat][:MAX_SECTION_LINKS]
+    qw = _words(question)
+    cands = [(i, t, href) for i, (t, href) in enumerate((links or {}).get(h.url, []))
+             if re.search(r"(?<!\w)" + re.escape(t) + r"(?!\w)", flat)]
+    cands.sort(key=lambda c: (-len(qw & _words(c[1])), c[0]))
+    shown = [f"{t}: {href}" for _, t, href in cands[:MAX_SECTION_LINKS]]
     head = f"[{h.url}" + (f" | {h.heading_path}]" if h.heading_path else "]")
     return head + "\n" + h.text + ("\nLinks: " + "; ".join(shown) if shown else "")
 
@@ -276,7 +282,7 @@ def render_prose(question: str, intent: Intent, hits: list[Hit], snapshot_id: st
                  links: Optional[dict[str, list[tuple[str, str]]]] = None) -> Answer:
     """`links`: page url -> (link text, target) pairs of that page (Store.links)."""
     top = hits[0]
-    sections = "\n\n".join(_section(h, links) for h in hits[:4])
+    sections = "\n\n".join(_section(h, links, question) for h in hits[:4])
     out = llm.text(SONNET, _PROSE_SYSTEM, f"Question: {question}\n\nSections:\n{sections}", max_tokens=1024)
     if out is not None and (out.strip().rstrip(".").upper() == "NONE" or _NONE_TOKEN.search(out)
                             or _DISCLAIMER.search(_sentences(out.strip())[0] if out.strip() else "")):
