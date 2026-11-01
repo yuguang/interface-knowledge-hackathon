@@ -100,12 +100,12 @@ Suggested ordering if parallelism is limited (solo, 2 days): Day 1 = Stage 1, th
 **Interfaces:**
 - Produces: repo layout above; `.venv` with Python 3.11; `pytest.ini` with `pythonpath = submission harness` and marker `real: needs local snapshots`.
 
-- [ ] **Step 1:** `git init` in `/Users/yuguang/Projects/interface`; write `.gitignore` with `snapshots_zip/`, `snapshots/0*/`, `submission/.cache/`, `results/`, `.venv/`, `__pycache__/`, `*.swp`, `.DS_Store`, `hackathon-knowledge-kit-participant/`.
-- [ ] **Step 2:** Copy kit dirs to root. Create `.venv` with `python3.11 -m venv .venv` (install 3.11 via `brew install python@3.11` or `uv python install 3.11` if missing).
-- [ ] **Step 3:** `pip install anthropic haystack-ai chroma-haystack chromadb rank_bm25` and `pip install pytest`; write `pip freeze` lines for the five runtime packages into `submission/requirements.txt`, pytest into `requirements-dev.txt`.
-- [ ] **Step 4:** Run `python harness/run_eval.py --submission starter --eval eval/public_eval.jsonl --judge --out results/starter`.
+- [x] **Step 1:** `git init` in `/Users/yuguang/Projects/interface`; write `.gitignore` with `snapshots_zip/`, `snapshots/0*/`, `submission/.cache/`, `results/`, `.venv/`, `__pycache__/`, `*.swp`, `.DS_Store`, `hackathon-knowledge-kit-participant/`.
+- [x] **Step 2:** Copy kit dirs to root. Create `.venv` with `python3.11 -m venv .venv` (install 3.11 via `brew install python@3.11` or `uv python install 3.11` if missing).
+- [x] **Step 3:** `pip install anthropic haystack-ai chroma-haystack chromadb rank_bm25` and `pip install pytest`; write `pip freeze` lines for the five runtime packages into `submission/requirements.txt`, pytest into `requirements-dev.txt`.
+- [x] **Step 4:** Run `python harness/run_eval.py --submission starter --eval eval/public_eval.jsonl --judge --out results/starter`.
   Expected: snapshots unpack into `snapshots/`, report prints, overall ≈ 0.09. Save the summary line to `dev/scores.csv` (header `commit,public,heldout,conflicts_f1,p95`).
-- [ ] **Step 5:** Verify `git status --porcelain | grep -E 'snapshots/0|\.zip'` prints nothing. Create the private GitHub repo (`gh repo create --private`). Commit `chore: repo skeleton, kit harness, pinned deps`.
+- [ ] **Step 5:** Verify `git status --porcelain | grep -E 'snapshots/0|\.zip'` prints nothing. Create the private GitHub repo (`gh repo create --private`). Commit `chore: repo skeleton, kit harness, pinned deps`. *(Leak check and commit done; GitHub repo creation deferred pending user approval — ruling R2.)*
 
 ### Task 1.2: Shared types, fact-key vocabulary, as_of registry, SQLite store
 
@@ -208,7 +208,7 @@ class Store:
 
 **Fixture:** `tests/fixtures/mini_site/` — three hand-written snapshots (`01_2026-05-12_baseline`, `02_2026-05-19_recrawl`, `05_2026-09-28_latest`) in the kit's manifest format, ~8 pages each, **written by hand, not copied from the site**: an auto-loans page with the model-year/term/APR table shape seen in the real site (`| 2024-27 Model Year | 60 Months | 5.39% APR1 |`), a calculator page saying 5.34%, a certificate-specials page (10-month jumbo 3.90% in 01/02, 4.00% in 05), a share-savings tier table, a branch page with hours, a press release ("fourth" in 01, "fifth" in 05), a page with routing number 273974581, and a page repeated nav/footer lines. `conftest.py` provides `mini_snapshots() -> list[Snapshot]` (via harness `load_snapshots`) and `real_snapshots()` that `pytest.skip`s when `snapshots/05_2026-09-28_latest` is absent.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 ```python
 # tests/test_keys.py
 def test_make_key_sorted():  assert make_key("auto_loan","apr",{"term":"60","model_year":"2024-2027"}) == "auto_loan|apr|model_year=2024-2027;term=60"
@@ -235,10 +235,10 @@ def test_facts_roundtrip():              # add_facts then facts(product="auto_lo
 def test_resolved_roundtrip():           # set_resolved / resolved(sid, "auto_loan","apr") preserves winner and losers
 def test_memo_roundtrip()
 ```
-- [ ] **Step 2:** Run `pytest tests/test_keys.py tests/test_snapshots.py tests/test_store.py -v` → FAIL (ImportError).
-- [ ] **Step 3:** Implement the four modules with the signatures above. `Store` serialises `FactObs`/`ResolvedFact` via `dataclasses.asdict` + JSON in `qualifiers_json` / `losers_json`. If FTS5 is missing, `fts_available=False` and `fts_match` raises `RuntimeError` (Track G handles fallback).
-- [ ] **Step 4:** Run the same command → PASS.
-- [ ] **Step 5:** Commit `feat(kb): shared types, fact keys, as_of registry, sqlite store`.
+- [x] **Step 2:** Run `pytest tests/test_keys.py tests/test_snapshots.py tests/test_store.py -v` → FAIL (ImportError).
+- [x] **Step 3:** Implement the four modules with the signatures above. `Store` serialises `FactObs`/`ResolvedFact` via `dataclasses.asdict` + JSON in `qualifiers_json` / `losers_json`. If FTS5 is missing, `fts_available=False` and `fts_match` raises `RuntimeError` (Track G handles fallback).
+- [x] **Step 4:** Run the same command → PASS.
+- [x] **Step 5:** Commit `feat(kb): shared types, fact keys, as_of registry, sqlite store`.
 
 ### Task 1.3: LLM wrapper, stage stubs, orchestrator, `build()`
 
@@ -310,7 +310,7 @@ Every stage call in `answer` is wrapped so an exception falls through to `compos
 
 `submission/solution.py`: adds its own directory to `sys.path`, imports the contract the same way the starter does, `def build(): return KnowledgeSystem()`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 ```python
 # tests/test_llm.py
 def test_disabled_returns_none(tmp_path): assert LLM(tmp_path/"c.sqlite", enabled=False).text(HAIKU,"s","u") is None
@@ -326,10 +326,10 @@ def test_end_to_end_mini(mini_snapshots):
 def test_deterministic(mini_snapshots): # same question twice -> identical text
 def test_stage_exception_yields_refusal(mini_snapshots, monkeypatch): # make intent.parse raise -> answer.confident is False
 ```
-- [ ] **Step 2:** `pytest tests/test_llm.py tests/test_system.py -v` → FAIL.
-- [ ] **Step 3:** Implement `llm.py`, all stubs, `system.py`, `solution.py`.
-- [ ] **Step 4:** `pytest -v` → all PASS. Then `KB_NO_LLM=1 python harness/run_eval.py --submission submission --eval eval/public_eval.jsonl --out results/foundation` → runs with zero crashes/timeouts; score ≈ starter.
-- [ ] **Step 5:** Commit `feat(kb): orchestrator, fail-soft LLM, stage stubs`; `git tag foundation`.
+- [x] **Step 2:** `pytest tests/test_llm.py tests/test_system.py -v` → FAIL.
+- [x] **Step 3:** Implement `llm.py`, all stubs, `system.py`, `solution.py`.
+- [x] **Step 4:** `pytest -v` → all PASS. Then `KB_NO_LLM=1 python harness/run_eval.py --submission submission --eval eval/public_eval.jsonl --out results/foundation` → runs with zero crashes/timeouts; score ≈ starter.
+- [x] **Step 5:** Commit `feat(kb): orchestrator, fail-soft LLM, stage stubs`; `git tag foundation`.
 
 ---
 

@@ -9,3 +9,4 @@ __pycache__/
 hackathon-knowledge-kit-participant/
 .superpowers/
 Knowledge-Hackathon-Assignment.pdf
+.env
