@@ -9,6 +9,12 @@ from ..store import Store
 
 COLLECTION = "chunks"
 BATCH = 1000
+# HNSW params pinned explicitly (Chroma's defaults, except num_threads, which defaults to cpu_count()).
+# NOTE: on chromadb 1.5.9 this does NOT make builds reproducible: num_threads is dropped from the resolved
+# config, and two single-threaded builds of the same data still return different neighbours
+# (see test_dense_index_is_reproducible, xfail).
+HNSW = {"hnsw:space": "cosine", "hnsw:num_threads": 1, "hnsw:construction_ef": 100, "hnsw:M": 16,
+        "hnsw:search_ef": 100}
 for _name in ("chromadb", "onnxruntime"):
     logging.getLogger(_name).setLevel(logging.ERROR)
 
@@ -27,6 +33,7 @@ def snapshot_flag(snapshot_id: str) -> str:
 def _drop_cached_client(path: str) -> None:
     """Chroma caches one open system per path in-process; after the files are wiped it would write to a dead DB."""
     try:
+        # Private API, verified against chromadb==1.5.9 (pinned in submission/requirements.txt).
         from chromadb.api.shared_system_client import SharedSystemClient
         system = SharedSystemClient._identifier_to_system.pop(path, None)
         if system is not None:
@@ -45,7 +52,7 @@ class DenseIndex:
         Path(path).mkdir(parents=True, exist_ok=True)
         self.client = chromadb.PersistentClient(path=path, settings=Settings(anonymized_telemetry=False))
         self.collection = self.client.create_collection(
-            COLLECTION, embedding_function=embedding_function(), metadata={"hnsw:space": "cosine"})
+            COLLECTION, embedding_function=embedding_function(), metadata=HNSW)
 
     def index_snapshot(self, store: Store, snapshot_id: str) -> None:
         """Embed chunks first seen in this snapshot; flag recurring chunks with a metadata update."""

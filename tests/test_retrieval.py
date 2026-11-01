@@ -226,6 +226,42 @@ def test_fts_only_when_dense_absent_or_incomplete(mini_store, tmp_path, embedder
     assert all(a.score > b.score for a, b in zip(got, got[1:]))
 
 
+class RandomEmbedder(HashEmbedder):
+    """Pseudo-random unit vectors seeded by the text: no exact-distance ties, so ranks are well defined."""
+
+    def __call__(self, input):
+        import random
+        out = []
+        for t in input:
+            rnd = random.Random(hashlib.sha256(t.encode()).digest())
+            v = [rnd.gauss(0, 1) for _ in range(32)]
+            n = math.sqrt(sum(x * x for x in v))
+            out.append([x / n for x in v])
+        return out
+
+
+@pytest.mark.xfail(strict=False, reason="chromadb 1.5.9 HNSW builds differ run to run even with num_threads=1 "
+                   "(fails ~6/8 runs at 3,000 chunks); needs a controller decision: exhaustive ef_search or exact "
+                   "re-scoring")
+def test_dense_index_is_reproducible(tmp_path, monkeypatch):
+    monkeypatch.setattr(dense, "embedding_function", RandomEmbedder)
+    st = Store()
+    st.add_snapshot(S5, "2026-09-28")
+    words = ["auto", "loan", "rate", "certificate", "savings", "mortgage", "branch", "hours", "fee", "card",
+             "checking", "member", "jumbo", "term", "month", "visa", "home", "equity", "student", "boat"]
+    for u in range(100):  # 3,000 chunks over 100 pages: past Chroma's brute-force buffer, into HNSW
+        _add(st, S5, f"https://www.dupaco.com/p{u}",
+             [" ".join(words[(u * 7 + i * j) % 20] for j in range(1, 6)) + f" {u}-{i}" for i in range(30)])
+    assert len(st.chunk_ids_in(S5)) == 3000
+    runs = []
+    for d in ("a", "b"):
+        r = Retriever(st, FakeLLM(None), tmp_path / d)
+        r.index_snapshot(S5)
+        assert r.dense.collection.metadata["hnsw:num_threads"] == 1
+        runs.append([[c for c, _ in r.dense.query(" ".join(words[i:i + 3]), S5, 25)] for i in range(18)])
+    assert runs[0] == runs[1] and all(len(q) == 25 for q in runs[0])
+
+
 # picker
 
 def test_picker_none():
