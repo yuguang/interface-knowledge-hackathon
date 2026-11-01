@@ -39,6 +39,8 @@ class StoredChunk:
     chunk: Chunk
 
 
+# Unhashable despite frozen=True: has dict/list fields. Don't put instances in sets, use them as dict keys,
+# or pass them to lru_cache'd functions (hash() raises TypeError).
 @dataclass(frozen=True)
 class PageContext:
     snapshot_id: str
@@ -50,6 +52,8 @@ class PageContext:
     chunks: list[StoredChunk]
 
 
+# Unhashable despite frozen=True: has dict/list fields. Don't put instances in sets, use them as dict keys,
+# or pass them to lru_cache'd functions (hash() raises TypeError).
 @dataclass(frozen=True)
 class FactObs:
     fact_key: str
@@ -69,6 +73,8 @@ class FactObs:
     chunk_id: Optional[int] = None
 
 
+# Unhashable despite frozen=True: has dict/list fields. Don't put instances in sets, use them as dict keys,
+# or pass them to lru_cache'd functions (hash() raises TypeError).
 @dataclass(frozen=True)
 class ResolvedFact:
     fact_key: str
@@ -78,6 +84,8 @@ class ResolvedFact:
     rule: str
 
 
+# Unhashable despite frozen=True: has dict/list fields. Don't put instances in sets, use them as dict keys,
+# or pass them to lru_cache'd functions (hash() raises TypeError).
 @dataclass(frozen=True)
 class Intent:
     family: str  # "fact" | "list" | "prose"
