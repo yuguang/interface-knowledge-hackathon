@@ -56,3 +56,66 @@ def test_model_year():
 def test_band_contains():
     assert band_contains("10000-24999", 24999) and not band_contains("10000-24999", 25000) and band_contains("25000-inf", 10**7)
     assert band_contains("10000-24999", 10000)
+
+
+# --- F2 (R11, R12, R17) ---
+
+@pytest.mark.parametrize("s,v", [("2023–26 Model Year", "2023-2026"), ("2023—26 Model Year", "2023-2026"),
+                                 ("2021 to 2023 Model Year", "2021-2023"), ("2017-20 Model Year", "2017-2020")])
+def test_model_year_separators(s, v):
+    assert norm_model_year(s) == v
+
+
+def test_model_year_single_is_point_band():
+    assert norm_model_year("2020 Model Year") == "2020-2020"
+    assert norm_model_year("2016 Model Year (and older)") == "0-2016"
+
+
+@pytest.mark.parametrize("s,v", [("$2,500 – $9,999.99", "2500-9999.99"), ("$2,500 — $9,999", "2500-9999"),
+                                 ("$2,500 to $9,999", "2500-9999"), ("$25,000-39,999", "25000-39999")])
+def test_norm_band_separators(s, v):
+    assert norm_band(s) == v
+
+
+@pytest.mark.parametrize("s", ["", "abc", "10000", "x-y", "10000-", None])
+def test_band_contains_malformed_is_false(s):
+    assert band_contains(s, 5) is False
+
+
+def test_band_gap_rule():
+    assert band_contains("10000-24999", 24999.99) is True
+    assert band_contains("10000-24999", 25000) is False
+    assert band_contains("10000-24999.99", 24999.99) is True
+    assert band_contains("10000-24999.99", 24999.995) is False
+
+
+def test_norm_band_minimum():
+    assert norm_band("$100,000", minimum=True) == "100000-inf"
+    assert norm_band("$1,000.00", minimum=True) == "1000-inf"
+    assert norm_band("$1,000.00") is None  # default unchanged
+    assert norm_band("$10,000 - $24,999", minimum=True) == "10000-24999"
+    assert norm_band("up to $100,000", minimum=True) == "0-100000"
+
+
+def test_norm_band_no_dollar_uses_separator_range():
+    assert norm_band("Tier 1: 0 - 499") == "0-499"
+    assert norm_band("Tier 2: 500 to 999") == "500-999"
+
+
+@pytest.mark.parametrize("s", ["36-72 months", "1-5 years", "36 – 72 Months", "12 to 24 months"])
+def test_norm_term_range_is_none(s):
+    assert norm_term_months(s) is None
+
+
+@pytest.mark.parametrize("s,v", [("4%", "4.00%"), (".25%", "0.25%"), ("4.5%", "4.50%"), ("5.125%", "5.125%"),
+                                 ("0.250%", "0.25%"), ("4", "4.00%")])
+def test_norm_percent_two_decimals(s, v):
+    assert norm_percent(s) == v
+
+
+@pytest.mark.parametrize("p,a,q", [("boat_loan", "apr", {}), ("auto_loan", "colour", {}),
+                                   ("auto_loan", "apr", {"term": "60;x"}), ("auto_loan", "apr", {"term": "a=b"}),
+                                   ("auto_loan", "apr", {"name": "a|b"})])
+def test_make_key_rejects_bad_parts(p, a, q):
+    with pytest.raises(ValueError):
+        make_key(p, a, q)
