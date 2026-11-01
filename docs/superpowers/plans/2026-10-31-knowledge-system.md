@@ -20,7 +20,7 @@
 - Committed extraction cache holds derived values only; `quote` is re-derived at ingest from local snapshots.
 - Answer text never contains: stale values for the asked fact, chit-chat echoes, the phrases "in these facts", "context", or a clarifying question ("Which … would you like").
 - Refusal text: contains "isn't listed on the website" and "please contact Dupaco", `confident=False`, and **no digits** beyond those in the question.
-- Determinism: temperature 0, stable sorts (score desc, then url asc, then chunk_id asc), memoized answers.
+- Determinism: deterministic via the LLM cache + answer memo (the pinned SDK/API rejects `temperature`), stable sorts (score desc, then url asc, then chunk_id asc), memoized answers.
 - One `Conflict` per fact key (PROJECT_PLAN §9.5): `values` = every distinct value across snapshots, `resolution` = snapshot-05 winner.
 - `as_of`: before 2026-05-12 → `01_…`; after 2026-09-28 → `05_…`; otherwise latest snapshot with `taken_on <= as_of`. Explicit `as_of` argument beats a date phrase in the question.
 - `requirements.txt` pins every runtime package (`anthropic`, `haystack-ai`, `chroma-haystack`, `chromadb`, `rank_bm25`) to the version `pip freeze` shows after Task 1.1.
@@ -342,7 +342,7 @@ Each track: own branch `track/<letter>-<name>`, own module, own test file. Real-
 **Files:** Modify `submission/kb/normalize.py`; Test `tests/test_normalize.py`
 **Interfaces:** Consumes `Chunk`, `Page`. Produces the three `normalize` signatures from Task 1.3.
 
-Values from spec: boilerplate = a line appearing on ≥ 20% of the snapshot's pages; drop image markup, link targets (keep link text), reCAPTCHA blocks, VIN inventory rows; split on headings at ≤ 1,500 chars; **never split a table** and repeat the header row in every chunk of a long table; prefix `title > heading path` into `text`; `hash = sha256(text)`.
+Values from spec: boilerplate = a line appearing on ≥ 20% of the snapshot's pages; drop image markup, link targets (keep link text), reCAPTCHA blocks, VIN inventory rows; split on headings at ≤ 1,500 chars; **never split a table** and repeat the header row in every chunk of a long table; prefix `title > heading path` into `text`; `hash = model.chunk_hash(url, text)` (identity is per URL — ruling R6).
 
 - [ ] **Step 1: Write failing tests**
 ```python
@@ -352,7 +352,7 @@ def test_table_never_split():      # 200-row table -> every chunk containing tab
 def test_heading_path_prefix():    # chunk.text.startswith("Auto Loans > Rates\n")
 def test_chunk_max_len():          # all len(c.text) <= 1500 + len(prefix) for prose-only input
 @pytest.mark.real
-def test_real_dedup_ratio(real_snapshots):  # distinct chunk hashes across 5 snapshots <= 15,000 (spec measured 11,777)
+def test_real_dedup_ratio(real_snapshots):  # distinct chunk hashes across 5 snapshots: record the count in the report and assert <= 30,000 (11,777 was measured with text-only hashing; per-URL hashing yields more — re-baseline here and tell Track G)
 ```
 - [ ] **Step 2:** `pytest tests/test_normalize.py -v` → FAIL.
 - [ ] **Step 3:** Implement. Recaptcha/VIN detection: drop lines matching `recaptcha|g-recaptcha` and table rows containing a 17-char VIN `[A-HJ-NPR-Z0-9]{17}`.
@@ -385,7 +385,7 @@ def test_real_histogram(real_snapshots):  # snapshot 05: every PAGE_TYPE except 
 **Files:** Modify `submission/kb/extract/tables.py`; Test `tests/test_extract_tables.py`
 **Interfaces:** Consumes `PageContext`, `keys.make_key`, `keys.norm_*`. Produces `extract(ctx) -> list[FactObs]` with `extractor="table"`.
 
-Header → qualifier mapping: `Term`→`term` (months), `Minimum Balance|Balance|Tier`→`tier` (band), `Loan Amount`→`loan_amount` (band), `Loan Program|Model Year`→`model_year`; value columns: `APR|Annual Percentage Rate`→`apr`, `APY|Annual Percentage Yield`→`apy`, `Rate|Dividend Rate|Interest Rate`→`rate`. Product from page URL/title + nearest heading (`auto` → `auto_loan`, `mortgage|home loan` + "fixed" → `mortgage_fixed`, "Jumbo" in row/heading → `kind=jumbo`, "Special" → `certificate_special`, `/business/` → `segment=business` else `segment=personal`). Tables with no value column are skipped (amortisation tables). `quote` = the table row text, ≤ 200 chars.
+Header → qualifier mapping: `Term`→`term` (months), `Balance Tier|Balance|Tier`→`tier` (band via `norm_band`), `Minimum Balance|Min. to Earn|Minimum Deposit` with a bare amount cell → `tier` via `norm_band(cell, minimum=True)` (`"$100,000"`→`"100000-inf"`), `Loan Amount`→`loan_amount` (band), `Loan Program|Model Year`→`model_year`; value columns: `APR|Annual Percentage Rate`→`apr`, `APY|Annual Percentage Yield`→`apy`, `Rate|Dividend Rate|Interest Rate`→`rate`. Product from page URL/title + nearest heading (`auto` → `auto_loan`, `mortgage|home loan` + "fixed" → `mortgage_fixed`, "Jumbo" in row/heading → `kind=jumbo`, "Special" → `certificate_special`, `/business/` → `segment=business` else `segment=personal`). Tables with no value column are skipped (amortisation tables). `quote` = the table row text, ≤ 200 chars.
 
 - [ ] **Step 1: Write failing tests**
 ```python
@@ -444,7 +444,7 @@ def test_cache_has_no_page_text():    # every line of submission/data/facts_cach
 
 Policy (PROJECT_PLAN §2.3), per fact key over observations in the target snapshot whose URL is live there: (1) exact key match only; (2) max authority; (3) newer `page_date`; (4) later snapshot of first observation; (5) promos with an end date before `taken_on` and news/press pages are dropped when any non-news observation exists; (6) remaining tie → sort by url, `rule="tie: higher authority"`. Losers = other observations of the key in that snapshot with a different `value_norm`.
 
-`select_for_intent`: filter by `intent.qualifiers` (exact match; `tier`/`loan_amount` given as an amount `"25000"` matches by `band_contains`); `superlative="highest"` → max value among matches; headline rules when qualifiers are under-specified: `mortgage_fixed` → `loan_amount` band containing 100000 plus term 360 and 180; `certificate_special` without `kind` → both regular and jumbo of the term; `auto_loan` without `model_year` → newest model-year band. Families: `list` returns all matches sorted by key; `fact` returns ≤ 4.
+`select_for_intent`: filter by `intent.qualifiers` (exact match; `tier`/`loan_amount`/`model_year` given as an amount or year (`"25000"`, `"2025"`) match by `band_contains` — an integer upper bound covers amounts below hi+1, so 24999.99 is in `10000-24999`); `superlative="highest"` → max value among matches; headline rules when qualifiers are under-specified: `mortgage_fixed` → `loan_amount` band containing 100000 plus term 360 and 180; `certificate_special` without `kind` → both regular and jumbo of the term; `auto_loan` without `model_year` → newest model-year band. Families: `list` returns all matches sorted by key; `fact` returns ≤ 4.
 
 `stale_values`: every `value_norm` observed for the selected keys in any snapshot, minus the selected values.
 
@@ -482,6 +482,7 @@ def test_scores_against_kit_scorer(): # build on mini fixture, score_conflicts(g
 
 **Files:** Modify `submission/kb/retrieval/{fts,dense,pipeline,picker}.py`; Test `tests/test_retrieval.py`
 **Interfaces:** Consumes `Store.fts_match`, `Store.new_chunks`, `Store.chunk_ids_in`, `LLM.json`. Produces the `Retriever` class from Task 1.3 (same four methods).
+**Foundation notes:** `Store.fts_match` uses an `EXISTS` join on `chunk_snapshot` (ruling R8 — keep it; `rowid IN (subquery)` took ~25 s/query). `build()` does not clear `index_dir`, so `Retriever.__init__` must wipe any stale dense index. Chunk ids are per URL (R6), so there are more distinct chunks than the 11,777 measured; check the index-time budget early. `LLM` calls return `None` often; verify once with a live call (`@pytest.mark.live`).
 
 - `fts.py`: `to_match_expr(question: str) -> str` (lowercase, drop stopwords and FTS syntax chars, quote tokens, OR-join, add synonyms CD↔certificate, APR↔rate); `fts_search(store, question, snapshot_id, k) -> list[Hit]`; `Bm25Fallback` over `store.chunk_ids_in(sid)` texts when `store.fts_available` is False.
 - `dense.py`: Chroma persistent client at `index_dir`, one collection, one document per distinct chunk (id = `str(chunk_id)`), metadata `{"url":…, "in_<NN>": True}` per snapshot prefix (`in_01`…`in_05`), updated with `collection.update` when a chunk recurs. `index_snapshot` embeds only `store.new_chunks(sid)` plus metadata updates for the rest. Query filter `{"in_<NN>": True}`.
@@ -508,7 +509,7 @@ def test_real_index_time(real_snapshots): # index all 5 snapshots < 600 s
 **Files:** Modify `submission/kb/intent.py`; Test `tests/test_intent.py`
 **Interfaces:** Consumes `keys`, `LLM.json` (fallback only, injected via `parse(question, llm=None)` keyword with default `None`). Produces `parse(question: str, llm: Optional[LLM] = None) -> Intent`.
 
-`cleaned_question`: strip chit-chat (greetings, "I'm not asking again", "for my coffee table", sentences without a product/attribute/question word). Synonym tables: CD/certificate/share certificate → `certificate`; "special" → `certificate_special`; APR → `apr`, APY/yield → `apy`, "interest rate"/"dividend" → `rate`; "jumbo" → `kind=jumbo`; "business" → `segment=business` else `personal`; "N-month"/"N year" → `term`; "$X" or "between $X and $Y" → `tier` amount (lower bound); "2025 model year"/"2025 vehicle" → `model_year` band containing 2025 (`2024-2027`); "highest/best" → `superlative="highest"`; "all/list/which … do you offer" → family `list`; hours/address/phone/routing/how many branches → fact family with branch/org product and `name` slug. `canonical = make_key(product or "-", attribute or "-", qualifiers) + "|" + family + "|" + (superlative or "")`; prose family canonical = sorted content words. Rules confidence low (no product found) and `llm` given → Haiku closed-label classification, cached.
+`cleaned_question`: strip chit-chat (greetings, "I'm not asking again", "for my coffee table", sentences without a product/attribute/question word). Synonym tables: CD/certificate/share certificate → `certificate`; "special" → `certificate_special`; APR → `apr`, APY/yield → `apy`, "interest rate"/"dividend" → `rate`; "jumbo" → `kind=jumbo`; "business" → `segment=business` else `personal`; "N-month"/"N year" → `term`; "$X" or "between $X and $Y" → `tier` amount (lower bound); "2025 model year"/"2025 vehicle" → `model_year="2025"` (the year itself; Track E matches it against site bands with `band_contains` — ruling R13); "highest/best" → `superlative="highest"`; "all/list/which … do you offer" → family `list`; hours/address/phone/routing/how many branches → fact family with branch/org product and `name` slug. `canonical = make_key(product or "-", attribute or "-", qualifiers) + "|" + family + "|" + (superlative or "")`; prose family canonical = sorted content words. Rules confidence low (no product found) and `llm` given → Haiku closed-label classification, cached.
 
 - [ ] **Step 1: Write failing tests**
 ```python
@@ -530,7 +531,7 @@ def test_unknown_is_prose(): assert parse("Tell me about your community impact")
 **Interfaces:** Consumes `ResolvedFact`, `Hit`, `Intent`, `LLM.text`, contract `Answer`/`Source`. Produces the four `compose` signatures.
 
 - `render_facts`: one template per attribute family, using the site's formatting: `"The 60-month APR for 2024-2027 model-year vehicles is as low as 5.39% APR."`; list family = one line per fact; sources = winner urls (dedup, order kept) with `snapshot_id` and `quote`; `conflict_note` = `"Other pages show <loser values>; used <winner page_type> page (<rule>)."` when any selected fact has losers — note goes only in `conflict_note`, never in `text`.
-- `render_prose`: Sonnet, temperature 0, system prompt: answer only from the given sections, current values only, no history, no "facts/context" wording, never ask a question, ≤ 3 sentences. LLM `None` → extractive: the sentences of the top hit that share most content words with the question, ≤ 400 chars.
+- `render_prose`: Sonnet via `LLM.text`, system prompt: answer only from the given sections, current values only, no history, no "facts/context" wording, never ask a question, ≤ 3 sentences. LLM `None` → extractive: the sentences of the top hit that share most content words with the question, ≤ 400 chars.
 - `refusal(question)`: `Answer(text="That isn't listed on the website, so I can't confirm it. Please contact Dupaco directly for this information.", confident=False)`.
 - `sanitize`: drop any sentence of `text` containing a number in `drop` and none in `keep` (compare with `scoring._numbers` semantics: value + unit); drop sentences matching `in these facts|context|would you like`.
 
@@ -584,6 +585,7 @@ def test_no_question_back(): # composed prose text has no "?"
 - [ ] **Step 1:** Merge; `pytest -v` → PASS.
 - [ ] **Step 2:** `dev/score_run.sh facts`. Expected: public ≥ 0.65, `stale_trap_hits == 0`; refusal fixture: refuse ≥ 95% of unanswerable, false refusals ≤ 5%; as_of fixture 100%.
 - [ ] **Step 3:** Paraphrase fixture consistency ≥ 0.9; repeat consistency 1.00. Fix misses in owning modules with tests.
+- [ ] **Step 3b (ruling R15):** anchor `snapshots.parse_question_date` — accept dates only after "as of", "as it stood", "back in", or "in <Month YYYY>" not preceded by an event verb; add negative tests: "Is the Hy-Vee branch closing March 31, 2026?" → None; "Do may 2026 graduates qualify?" → None; "What did the May 2026 press release say?" → None.
 - [ ] **Step 4:** Commit `feat: fact path integrated`; push.
 
 ### Task 3.3: Conflicts tuning
