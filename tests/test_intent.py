@@ -68,7 +68,7 @@ def test_unknown_is_prose():
 
 def test_term_years_to_months():
     i = parse("Can you tell me the interest rate for a 30-year mortgage?")
-    assert (i.product, i.attribute, i.qualifiers["term"]) == ("mortgage_fixed", "rate", "360")
+    assert (i.product, i.attribute, i.qualifiers["term"]) == ("mortgage_fixed", None, "360")  # generic rate
     assert parse("15 year mortgage APR").qualifiers["term"] == "180"
 
 
@@ -100,7 +100,7 @@ def test_branch_facts():
     assert parse("What are the drive-up hours?").attribute == "hours_driveup"
     assert parse("What are your lobby hours?").attribute == "hours_lobby"
     i = parse("How many branches does Dupaco have?")
-    assert (i.family, i.product, i.attribute) == ("fact", "branch", "count")
+    assert (i.family, i.product, i.attribute, i.qualifiers) == ("fact", "org", "count", {"what": "branches"})
     i = parse("When does the Hy-Vee branch close?")
     assert (i.attribute, i.qualifiers["name"]) == ("closure_date", "hy-vee")
     assert parse("Is the Hy-Vee branch still open today (October 2026)?").attribute == "status"
@@ -110,7 +110,7 @@ def test_no_attribute_products_still_fact():
     for text, p in [("What interest rate do you charge on a construction loan?", "construction_loan"),
                     ("What is your rate on a 7/1 adjustable-rate mortgage?", "mortgage_arm")]:
         i = parse(text)
-        assert (i.family, i.product, i.attribute) == ("fact", p, "rate")
+        assert (i.family, i.product, i.attribute) == ("fact", p, None)  # generic rate: resolve widens to APR
 
 
 def test_canonical_is_valid_key_and_stable():
@@ -182,3 +182,40 @@ def test_at_least_not_superlative():
 def test_word_boundaries():
     assert parse("I am interested in your corporate culture").family == "prose"
     assert parse("Do you operate on Sundays?").attribute is None
+
+
+# ---- Stage 2 final fix wave
+
+@pytest.mark.parametrize("text,product", [
+    ("What is the rate for the Bright Savings account?", "bright_savings"),
+    ("Provide current checking account interest rates", "checking"),
+    ("I would like to know the rates for the credit cards", "credit_card"),
+    ("auto loan rate", "auto_loan"),
+])
+def test_generic_rate_is_fact_with_no_attribute(text, product):
+    i = parse(text)
+    assert (i.product, i.attribute) == (product, None) and i.family in ("fact", "list")
+    assert i.canonical.endswith("|generic")
+
+
+def test_explicit_rate_attributes_kept():
+    assert parse("What is the APY on Bright Savings?").attribute == "apy"
+    assert parse("credit card APR").attribute == "apr"
+    i = parse("What dividend rate do I earn on Share Savings with a balance between $10,000 and $24,999?")
+    assert (i.product, i.attribute) == ("share_savings", "rate")
+    assert parse("Bright Savings rate").canonical != parse("Bright Savings dividend rate").canonical
+
+
+def test_generic_rate_without_rate_product_is_prose():
+    assert parse("What is the interest rate at the Galena branch?").family == "prose"
+
+
+@pytest.mark.parametrize("text", ["How many branches does Dupaco have?", "how many locations do you have",
+                                  "What is the number of branch offices?"])
+def test_branch_count_matches_c2_key(text):
+    i = parse(text)
+    assert (i.product, i.attribute, i.qualifiers) == ("org", "count", {"what": "branches"})
+
+
+def test_tiers_question_is_list():
+    assert parse("Do any Dupaco savings tiers pay 0.35% APY?").family == "list"

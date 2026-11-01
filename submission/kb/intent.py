@@ -2,6 +2,10 @@
 
 `parse` never raises on a string input: rules decide family/product/attribute/qualifiers; only when no
 product is found (and an LLM is supplied) does a cached, closed-label Haiku classification get a say.
+
+A generic rate word ("rate", "interest rate", "rates") yields a fact intent with a product and attribute None:
+the site quotes deposits as APY and loans/cards as APR, so resolve.select_for_intent then covers rate plus
+APY/APR (resolve.rate_attributes). Explicit "APY", "APR" and "dividend rate" keep their exact attribute.
 """
 from __future__ import annotations
 
@@ -48,6 +52,8 @@ _ATTR_WORDS = re.compile(r"\b(rates?|aprs?|apys?|yield|dividends?|hours|address|
                          r"balance|minimum|eligible|eligibility|recognition|award|close[sd]?)\b", re.I)
 _GREETING = re.compile(r"^\s*(?:(?:hi|hello|hey|howdy|good (?:morning|afternoon|evening)|thanks|thank you)\b"
                        r"(?:\s+(?:there|dupaco))?\s*[,!.:-]*\s*)+", re.I)
+
+_GENERIC_RATE = "rate*"  # internal marker; never leaves parse()
 
 _NAME_STOP = {"the", "what", "is", "are", "dupaco", "dupaco's", "a", "an", "of", "for", "your", "our", "which",
               "when", "where", "how", "does", "do", "can", "and", "or", "any", "hours", "address", "at", "in", "to",
@@ -96,7 +102,7 @@ def _attribute(low: str) -> tuple[Optional[str], Optional[str]]:
     if re.search(r"routing|\brtn\b|\baba\b", low):
         return "routing_number", "org"
     if re.search(r"how many (?:dupaco )?(?:branch|location|office)|number of (?:branch|location|office)", low):
-        return "count", "branch"
+        return "count", "org"
     if re.search(r"\bhours\b|\bopen (?:until|late|on)\b", low):
         return ("hours_driveup" if re.search(r"drive[- ]?(?:up|thru|through)", low) else "hours_lobby"), "branch"
     if re.search(r"\bclos(?:e|es|ing|ure)\b", low) and re.search(r"branch|hy-?vee|location", low):
@@ -120,8 +126,10 @@ def _attribute(low: str) -> tuple[Optional[str], Optional[str]]:
         return "apr", None
     if re.search(r"\bapys?\b|\byields?\b|annual percentage yield", low):
         return "apy", None
-    if re.search(r"\brates?\b|\bdividends?\b|\binterest\b", low):
+    if re.search(r"\bdividend rates?\b", low):
         return "rate", None
+    if re.search(r"\brates?\b|\bdividends?\b|\binterest\b", low):
+        return _GENERIC_RATE, None
     return None, None
 
 
@@ -138,8 +146,10 @@ def _clean(question: str) -> str:
     return out or question.strip()
 
 
-def _qualifiers(q: str, low: str, product: str, name: Optional[str]) -> dict[str, str]:
+def _qualifiers(q: str, low: str, product: str, name: Optional[str], attribute: Optional[str] = None) -> dict[str, str]:
     quals: dict[str, str] = {}
+    if product == "org" and attribute == "count":  # C2 keys branch counts as org|count|what=branches
+        return {"what": "branches"}
     if product in _NO_SEGMENT:
         if name:
             quals["name"] = name
@@ -184,6 +194,8 @@ def _safe(quals: dict[str, str]) -> dict[str, str]:
 def _canonical(family: str, product, attribute, quals, superlative, low: str) -> str:
     if family == "prose" or not product or not attribute:
         return "prose|" + " ".join(_content_words(low))
+    if attribute == _GENERIC_RATE:
+        return keys.make_key(product, "rate", quals) + "|" + family + "|" + (superlative or "") + "|generic"
     return keys.make_key(product, attribute, quals) + "|" + family + "|" + (superlative or "")
 
 
@@ -249,13 +261,14 @@ def parse(question: str, llm: Optional[LLM] = None) -> Intent:
     elif re.search(r"\b(lowest|cheapest|smallest)\b", low):
         superlative = "lowest"
 
-    if product is None or attribute is None:
+    if product is None or attribute is None or (attribute == _GENERIC_RATE and product in _NO_SEGMENT):
         return Intent("prose", None, None, {}, None, cleaned,
                       _canonical("prose", None, None, {}, None, low))
 
-    quals = _safe(_qualifiers(q, low, product, name))
-    plural = re.search(r"credit cards|certificates\b|\bcds\b|branches", low) and attribute != "count"
+    quals = _safe(_qualifiers(q, low, product, name, attribute))
+    plural = re.search(r"credit cards|certificates\b|\bcds\b|branches|\btiers\b", low) and attribute != "count"
     family = "list" if (re.search(r"\b(all|list|every)\b", low)
                         or re.search(r"\b(which|what)\b.*\b(offer|have)\b", low) or plural) else "fact"
-    return Intent(family, product, attribute, quals, superlative, cleaned,
-                  _canonical(family, product, attribute, quals, superlative, low))
+    canonical = _canonical(family, product, attribute, quals, superlative, low)
+    return Intent(family, product, None if attribute == _GENERIC_RATE else attribute, quals, superlative, cleaned,
+                  canonical)
