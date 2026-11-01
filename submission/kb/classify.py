@@ -18,14 +18,19 @@ _EFFECTIVE = re.compile(rf"effective\s+(?:as\s+of\s+)?(?:{_NUM_DATE}|{_TXT_DATE}
 _AS_OF = re.compile(rf"as\s+of\s+(?:{_NUM_DATE}|{_TXT_DATE})", re.I)
 _TEXT_DATE = re.compile(_TXT_DATE, re.I)
 _URL_DATE = re.compile(r"/(\d{4})/(\d{2})/(\d{2})(?:/|$)")
-_RATE_HEADER = re.compile(r"apr|apy|dividend", re.I)
+_RATE_HEADER = re.compile(r"\b(?:apr|apy|dividend)\b", re.I)
+_TABLE_SEP = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
+_LOCATION = re.compile(r"\blocations?\b", re.I)
 _BLOG_PATH = re.compile(r"/learn/blog/|/\d{4}/\d{2}/\d{2}/|/dupacodaily/\d{4}/")
 _NEWS_PATH = re.compile(r"/news/|/newsroom|/press|/about/news|/resources/dupaco-news")
 _DISCLOSURE_PATH = re.compile(r"\.pdf$|/disclosures|/privacy-policy")
 
 
 def _has_rate_table(markdown: str) -> bool:
-    return any(line.lstrip().startswith("|") and _RATE_HEADER.search(line) for line in markdown.splitlines())
+    """True if any table's header row (the line above a |---| separator) names APR/APY/Dividend."""
+    lines = markdown.splitlines()
+    return any(line.lstrip().startswith("|") and _RATE_HEADER.search(line) and _TABLE_SEP.match(nxt)
+               for line, nxt in zip(lines, lines[1:]))
 
 
 def _iso(y: int, m: int, d: int) -> str | None:
@@ -77,10 +82,10 @@ def _page_type(host: str, path: str, title: str, markdown: str) -> str:
     if _DISCLOSURE_PATH.search(p):
         return "disclosure"
     rate_table = _has_rate_table(markdown)
-    if p.endswith("rates") or (rate_table and "rates" in title.lower()):
+    if p.endswith(("/rates", "-rates")) or (rate_table and "rates" in title.lower()):
         return "rate_sheet"
     if ("/locations/" in p + "/" or "/branches/" in p + "/" or p.endswith("/contact")
-            or "location" in title.lower()):
+            or _LOCATION.search(title)):
         return "branch"
     if "/promo" in p or "/special" in p or p.endswith("-lp") or ("special" in title.lower() and not rate_table):
         return "promo"

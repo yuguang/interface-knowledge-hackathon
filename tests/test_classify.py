@@ -44,6 +44,23 @@ def test_rate_table_with_rates_title():
     assert classify_page(url, "Savings | Dupaco", RATE_TABLE, "2026-09-28").page_type == "product"
 
 
+def test_body_row_words_are_not_a_rate_header():
+    md = "| Item | Status |\n| --- | --- |\n| Loan | approved in April, approx 5 days |\n"
+    url = "https://www.dupaco.com/personal/x"
+    assert classify_page(url, "Our Rates", md, "2026-09-28").page_type == "product"
+    assert classify_page(url, "Holiday Special", md, "2026-09-28").page_type == "promo"
+
+
+def test_rates_path_needs_segment_boundary():
+    assert classify_page("https://www.dupaco.com/about/migrates", "", "", "2026-09-28").page_type == "other"
+    assert classify_page("https://www.dupaco.com/business-rates", "", "", "2026-09-28").page_type == "rate_sheet"
+
+
+def test_location_title_is_a_word():
+    assert classify_page("https://www.dupaco.com/about/x", "Relocation tips", "", "2026-09-28").page_type == "other"
+    assert classify_page("https://www.dupaco.com/about/x", "Find a Location", "", "2026-09-28").page_type == "branch"
+
+
 def test_special_title_without_rate_table_is_promo():
     url = "https://www.dupaco.com/personal/x"
     assert classify_page(url, "Holiday Special", "no table", "2026-09-28").page_type == "promo"
