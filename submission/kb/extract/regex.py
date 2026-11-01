@@ -84,13 +84,19 @@ _LOCATED = re.compile(r"\blocated at \d{1,5}\s+((?:[NSEW]\.\s+)?[A-Z][\w.' ]{2,4
 _DATELINE = re.compile(r"^([A-Z][A-Z .]{2,30}),\s+(?:Iowa|Wis\.?|Wisconsin|Ill\.?|Illinois)\b")
 
 
+def _addr_slug(street: str, city: str) -> str:
+    """City + street slug of one address ("3299 Hillcrest Rd." in Dubuque -> "dubuque-hillcrest-rd"), so branches
+    sharing a city get distinct keys (R43). The same slug keys a branch's address, phone and hours."""
+    return slug(city + " " + re.sub(r"^\d+\s+", "", street.strip()))[:60]
+
+
 def _branch_name(ctx: PageContext, lines: list[str], upto: int) -> str:
     """Branch slug (shared by hours, phone and address): nearest full address' city, else dateline city, else title slug."""
     order = list(range(min(upto, len(lines) - 1), -1, -1)) + list(range(upto + 1, len(lines)))
     for i in order:  # nearest preceding address, else the first following one
         m = _ADDR.search(lines[i])
         if m and _STREET_WORD.search(m.group(1)):
-            return slug(m.group(2))
+            return _addr_slug(m.group(1), m.group(2))
     city = next((slug(m.group(1)) for m in map(_DATELINE.match, lines[:40]) if m), None)
     if city:
         for ln in lines:
@@ -202,7 +208,7 @@ def _address(em: _Emitter, lines: list[str]) -> None:
             if m and _STREET_WORD.search(m.group(1)):
                 street, city, st, zip5 = m.group(1).strip(), m.group(2).strip(), m.group(3), m.group(4)
                 norm = f"{street}, {city}, {st} {zip5}"
-                em.add("branch", "address", {"name": slug(city)}, m.group(0).strip(), norm, cand)
+                em.add("branch", "address", {"name": _addr_slug(street, city)}, m.group(0).strip(), norm, cand)
                 break
 
 
@@ -221,7 +227,7 @@ def _phone(em: _Emitter, lines: list[str]) -> None:
         for am in _ADDR.finditer(near):
             pass
         if am and _STREET_WORD.search(am.group(1)):
-            em.add("branch", "phone", {"name": slug(am.group(2))}, m.group(1), _norm_phone(m.group(1)), ln)
+            em.add("branch", "phone", {"name": _addr_slug(am.group(1), am.group(2))}, m.group(1), _norm_phone(m.group(1)), ln)
         elif "located at" in ln:
             em.add("branch", "phone", {"name": _branch_name(em.ctx, lines, i)}, m.group(1), _norm_phone(m.group(1)), ln)
         elif re.match(r"^[-*\s]*phone\b", ln, re.I):

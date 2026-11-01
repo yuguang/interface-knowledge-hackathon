@@ -219,3 +219,30 @@ def test_branch_count_matches_c2_key(text):
 
 def test_tiers_question_is_list():
     assert parse("Do any Dupaco savings tiers pay 0.35% APY?").family == "list"
+
+
+def test_branch_question_slug_matches_extractor_slug_and_resolves():
+    """R43: a question naming a street branch selects its address; a city-only question lists every branch there."""
+    from kb.extract.regex import _addr_slug
+    from kb.keys import parse_key
+    from kb.model import AUTHORITY, FactObs, ResolvedFact
+    from kb.resolve import select_for_intent
+
+    def rf(street, city):
+        key = f"branch|address|name={_addr_slug(street, city)}"
+        o = FactObs(key, "branch", "address", parse_key(key)[2], street, street, "s5", "2026-09-28", "https://x/contact",
+                    "branch", AUTHORITY["branch"], None, "", "regex")
+        return ResolvedFact(key, street, o, [], "single source")
+
+    res = [rf("3299 Hillcrest Rd.", "Dubuque"), rf("1465 Sycamore St.", "Dubuque"),
+           rf("5865 Saratoga Road", "Asbury"), rf("11375 Oldenburg Ln.", "Galena")]
+    i = parse("What is the Asbury Road branch address?")
+    assert i.qualifiers == {"name": "asbury-road"}
+    assert [r.value for r in select_for_intent(i, res)] == ["5865 Saratoga Road"]
+    assert [r.value for r in select_for_intent(parse("What is the address of the Hillcrest Rd. branch?"), res)] \
+        == ["3299 Hillcrest Rd."]
+    i = parse("What is the address of the Dubuque branch?")
+    assert i.qualifiers == {"name": "dubuque"}
+    assert sorted(r.value for r in select_for_intent(i, res)) == ["1465 Sycamore St.", "3299 Hillcrest Rd."]
+    i = parse("What is the address of the Dubuque branch on Asbury?")
+    assert i.qualifiers == {"name": "dubuque"}
