@@ -1,0 +1,36 @@
+{"question": "What is the APY on the 17-month certificate special?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["4.10%"]}
+{"question": "What APY does the 17-month jumbo certificate special pay?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["4.20%"]}
+{"question": "What is the APR for a 60-month auto loan on a 2025 vehicle?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["5.39% APR"]}
+{"question": "What is the APR for an 84-month auto loan on a 2024 model year?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["5.59% APR"]}
+{"question": "What is the 30-year fixed mortgage rate for loans of $100,000 or less?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["7.13%", "7.27%"]}
+{"question": "What is the 15-year fixed mortgage rate?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["6.75%", "6.88%"]}
+{"question": "What dividend rate does Share Savings pay for $10,000 to $24,999.99?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["0.15%"]}
+{"question": "What is Dupaco's routing number?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["273974581"]}
+{"question": "What is the address of the Galena branch?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["11375 Oldenburg"]}
+{"question": "When does the Hy-Vee branch close?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["March 31, 2026"]}
+{"question": "What APY does Bright Savings pay?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["2.25%"]}
+{"question": "What is the APR on a 36-month personal loan?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["10.49%"]}
+{"question": "What is the standard APR range on the Platinum Visa?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["12.50%"]}
+{"question": "What is the APR on the Business Rewards Visa?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["20.50%"]}
+{"question": "What APY does 1st Rate Checking pay on $5,000 to $24,999.99?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["2.50%"]}
+{"question": "How many times has Forbes recognized Dupaco?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["fifth time Forbes recognized Dupaco"]}
+{"question": "How many employees used Volunteer Time Off in 2023?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["294 Dupaco employees"]}
+{"question": "Which mobile wallets can Dupaco cards be added to?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["Apple Pay", "Google Pay", "Samsung Pay"]}
+{"question": "What are the drive-up hours?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["8 a.m.-6 p.m."]}
+{"question": "Where can Hy-Vee branch members get full-service banking?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["Key West and Sycamore Street"]}
+{"question": "What is the HELOC rate?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["6.25%"]}
+{"question": "What APY does Launchpad Savings pay?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["3.25%"]}
+{"question": "How much assistance does the Home$tart program provide?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["$15,000"]}
+{"question": "How do I join Dupaco online?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["join.dupaco.com"]}
+{"question": "What APY did the 10-month jumbo certificate special pay?", "snapshot_id": "01_2026-05-12_baseline", "must_include": ["3.90%"]}
+{"question": "What was the 60-month auto loan APR for a 2023-26 model year?", "snapshot_id": "01_2026-05-12_baseline", "must_include": ["5.19% APR"]}
+{"question": "What was the 30-year fixed purchase mortgage rate for $100,000 or less?", "snapshot_id": "01_2026-05-12_baseline", "must_include": ["5.875%", "6.010%"]}
+{"question": "What APY did 1st Rate Checking pay?", "snapshot_id": "01_2026-05-12_baseline", "must_include": ["3.00%"]}
+{"question": "What APY did the 12-month certificate pay?", "snapshot_id": "01_2026-05-12_baseline", "must_include": ["2.90%"]}
+{"question": "What APY did the 25-month certificate special pay?", "snapshot_id": "01_2026-05-12_baseline", "must_include": ["3.60%"]}
+{"question": "What was the 30-year fixed mortgage rate for $100,000 or less?", "snapshot_id": "02_2026-05-19_recrawl", "must_include": ["6.250%", "6.388%"]}
+{"question": "What was the 15-year fixed purchase mortgage rate?", "snapshot_id": "02_2026-05-19_recrawl", "must_include": ["6.000%", "6.125%"]}
+{"question": "What APY did the 17-month certificate special pay?", "snapshot_id": "03_2026-06-09_recrawl", "must_include": ["3.85%"]}
+{"question": "What APY did the 12-month certificate pay?", "snapshot_id": "03_2026-06-09_recrawl", "must_include": ["3.40%"]}
+{"question": "What APY did the 17-month jumbo certificate special pay?", "snapshot_id": "04_2026-08-27_rebaseline", "must_include": ["4.05%"]}
+{"question": "What was the 30-year fixed mortgage rate for $100,000 or less?", "snapshot_id": "04_2026-08-27_rebaseline", "must_include": ["6.375%", "6.514%"]}
