@@ -50,11 +50,13 @@ _GREETING = re.compile(r"^\s*(?:(?:hi|hello|hey|howdy|good (?:morning|afternoon|
                        r"(?:\s+(?:there|dupaco))?\s*[,!.:-]*\s*)+", re.I)
 
 _NAME_STOP = {"the", "what", "is", "are", "dupaco", "dupaco's", "a", "an", "of", "for", "your", "our", "which",
-              "when", "where", "how", "does", "do", "can", "and", "or", "any", "hours", "address"}
+              "when", "where", "how", "does", "do", "can", "and", "or", "any", "hours", "address", "at", "in", "to",
+              "my", "each", "every", "all", "this", "that", "other", "nearest", "closest", "local", "main",
+              "lobby", "drive-up", "from", "about", "does", "still", "same", "your", "their", "its", "on"}
 
 
 def _slug(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", s.lower()).strip("_")
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
 
 
 def _amount(num: str) -> str:
@@ -77,11 +79,16 @@ def _find_product(low: str) -> Optional[str]:
 
 
 def _branch_name(q: str) -> Optional[str]:
-    m = re.search(r"((?:[A-Z][\w'-]*\s+)*[A-Z][\w'-]*)\s+[Bb]ranch\b", q)
+    """Words directly before "branch"/"location" (walking back to the first stopword), as a hyphen slug."""
+    m = re.search(r"((?:[\w'.-]+\s+){0,3})branch\b", q, re.I)
     if not m:
         return None
-    words = [w for w in m.group(1).split() if w.lower() not in _NAME_STOP]
-    return _slug(" ".join(words)) or None
+    words = []
+    for w in reversed(m.group(1).split()):
+        if w.lower() in _NAME_STOP:
+            break
+        words.append(w)
+    return _slug(" ".join(reversed(words))) or None
 
 
 def _attribute(low: str) -> tuple[Optional[str], Optional[str]]:
@@ -113,7 +120,7 @@ def _attribute(low: str) -> tuple[Optional[str], Optional[str]]:
         return "apr", None
     if re.search(r"\bapys?\b|\byields?\b|annual percentage yield", low):
         return "apy", None
-    if re.search(r"rates?\b|dividends?|interest", low):
+    if re.search(r"\brates?\b|\bdividends?\b|\binterest\b", low):
         return "rate", None
     return None, None
 
@@ -156,7 +163,7 @@ def _qualifiers(q: str, low: str, product: str, name: Optional[str]) -> dict[str
     if product == "credit_card":
         c = re.search(r"\b(platinum|rewards)\b", low)
         if c:
-            quals["name"] = f"{c.group(1)}_visa"
+            quals["name"] = f"{c.group(1)}-visa"
     elif name:
         quals["name"] = name
     return quals
@@ -239,7 +246,7 @@ def parse(question: str, llm: Optional[LLM] = None) -> Intent:
     superlative = None
     if re.search(r"\b(highest|best|top|maximum|greatest)\b", low):
         superlative = "highest"
-    elif re.search(r"\b(lowest|cheapest|smallest|least)\b", low):
+    elif re.search(r"\b(lowest|cheapest|smallest)\b", low):
         superlative = "lowest"
 
     if product is None or attribute is None:

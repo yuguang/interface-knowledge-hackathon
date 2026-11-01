@@ -102,7 +102,7 @@ def test_branch_facts():
     i = parse("How many branches does Dupaco have?")
     assert (i.family, i.product, i.attribute) == ("fact", "branch", "count")
     i = parse("When does the Hy-Vee branch close?")
-    assert (i.attribute, i.qualifiers["name"]) == ("closure_date", "hy_vee")
+    assert (i.attribute, i.qualifiers["name"]) == ("closure_date", "hy-vee")
     assert parse("Is the Hy-Vee branch still open today (October 2026)?").attribute == "status"
 
 
@@ -157,3 +157,28 @@ def test_award_and_eligibility():
     i = parse("What recognition has Dupaco received from Forbes?")
     assert (i.product, i.attribute, i.qualifiers) == ("org", "award", {"name": "forbes"})
     assert parse("Who is eligible to become a Dupaco member?").attribute == "eligibility"
+
+
+def test_names_are_hyphen_slugs():
+    assert parse("When does the Hy-Vee branch close?").qualifiers["name"] == "hy-vee"
+    assert parse("lobby hours for the Mullan Avenue branch").qualifiers["name"] == "mullan-avenue"
+    assert parse("standard APR on the Dupaco Platinum Visa").qualifiers["name"] == "platinum-visa"
+
+
+def test_lowercase_branch_name_and_no_name():
+    i = parse("what is the lobby hours at the galena branch?")
+    assert (i.product, i.attribute, i.qualifiers) == ("branch", "hours_lobby", {"name": "galena"})
+    i = parse("What are the lobby hours at any branch?")
+    assert i.qualifiers == {}
+    assert parse("What are your lobby hours?").qualifiers == {}
+
+
+def test_at_least_not_superlative():
+    i = parse("auto loan APR for at least $5,000")
+    assert i.superlative is None
+    assert parse("What is the lowest auto loan APR?").superlative == "lowest"
+
+
+def test_word_boundaries():
+    assert parse("I am interested in your corporate culture").family == "prose"
+    assert parse("Do you operate on Sundays?").attribute is None
