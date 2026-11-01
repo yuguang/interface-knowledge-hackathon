@@ -142,3 +142,34 @@ def test_stale_values():
     st = build([obs(K, "5.39%"), obs(K, "5.34%", url="https://x/calc", ptype="calculator"), obs(K, "5.10%", "s1")])
     res = resolve_snapshot(st, "s5")
     assert stale_values(st, res) == {"5.34%", "5.10%"}
+
+
+def test_rule_not_tie_when_agreeing_winners():
+    st = build([obs(K, "5.39%", url="https://x/a"), obs(K, "5.39%", url="https://x/b"),
+                obs(K, "5.00%", url="https://x/n", ptype="news")])
+    [r] = resolve_snapshot(st, "s5")
+    assert r.value == "5.39%" and r.rule.startswith("authority")
+
+
+def test_weekend_not_an_end_cue():
+    st = build([obs(K, "4.00%", url="https://x/p", ptype="promo", quote="weekends 2020-01-01"),
+                obs(K, "5.50%", url="https://x/b", ptype="blog")])
+    assert resolve_snapshot(st, "s5")[0].value == "4.00%"
+
+
+def test_nested_bands_narrowest():
+    ks = ["mortgage_fixed|apr|loan_amount=0-100000;term=360", "mortgage_fixed|apr|loan_amount=0-200000;term=360"]
+    res = resolve_snapshot(build([obs(ks[0], "7.13%"), obs(ks[1], "7.20%")]), "s5")
+    f = lambda a: [r.fact_key for r in select_for_intent(intent("mortgage_fixed", "apr", {"loan_amount": a}), res)]
+    assert f("150000") == [ks[1]]
+    assert f("100000") == [ks[0]]
+
+
+def test_mortgage_headline_prefers_purchase():
+    b = "mortgage_fixed|apr|loan_amount=0-100000;term=360"
+    r_ = "mortgage_fixed|apr|kind=refinance;loan_amount=0-100000;term=360"
+    c = "mortgage_fixed|apr|loan_amount=0-200000;term=360"
+    res = resolve_snapshot(build([obs(b, "7.13%"), obs(r_, "7.30%"), obs(c, "7.20%")]), "s5")
+    assert [r.fact_key for r in select_for_intent(intent("mortgage_fixed", "apr"), res)] == [b]
+    sel = select_for_intent(intent("mortgage_fixed", "apr", {"kind": "refinance"}), res)
+    assert [r.fact_key for r in sel] == [r_]
