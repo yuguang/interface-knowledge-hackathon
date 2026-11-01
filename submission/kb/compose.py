@@ -25,7 +25,10 @@ _BANNED = re.compile(r"in these facts|context|would you like", re.I)
 _SPLIT = re.compile(r"(?<=[.!?])\s+")
 _AMPM_END = re.compile(r"\b[ap]\.m\.$", re.I)
 _ABBR_END = re.compile(r"\b(?:St|Ave|Blvd|Rd|Dr|Ste|Mt|Ft|Mr|Mrs|Ms|Jr|Sr|Hwy)\.$", re.I)
-_DAY_START = re.compile(r"(?:mon|tues?|wed|thu(?:rs?)?|fri|sat|sun)(?:day)?\b", re.I)
+# Whole-word weekday, full name or standard abbreviation, followed by a non-letter (or end): "Saturday", "Mon-Fri",
+# "Thurs,". Words that merely start with a day stem ("Monitor", "Saturated", "Wedge") do not match.
+_DAY_START = re.compile(r"(?:monday|mon|tuesday|tues|tue|wednesday|wed|thursday|thurs|thur|thu"
+                        r"|friday|fri|saturday|sat|sunday|sun)(?![a-z])", re.I)
 
 
 def _continues(prev: str, nxt: str) -> bool:

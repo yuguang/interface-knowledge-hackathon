@@ -148,9 +148,54 @@ def test_sanitize_ampm_sentence_end_still_drops_stale(lead):
     assert "5.34" not in out and "5.39%" in out
 
 
-def test_sanitize_mon_fri_abbreviation_intact():
-    t = "Open 8:30 a.m. Mon-Fri and 9 a.m. Saturday."
-    assert sanitize(Answer(t), set(), {"$9"}).text == t
+_WEEKDAYS = ["Mon", "Monday", "Tue", "Tues", "Tuesday", "Wed", "Wednesday", "Thu", "Thur", "Thurs", "Thursday",
+             "Fri", "Friday", "Sat", "Saturday", "Sun", "Sunday"]
+_AMPM_CONTINUE = ["- 5 p.m.", "\u2013 5 p.m.", "7 days a week", "to 5 p.m."] + _WEEKDAYS + [
+    w.lower() for w in _WEEKDAYS] + [w.upper() for w in _WEEKDAYS] + ["Mon-Fri", "Sat,", "Thurs, Fri", "Sun;"]
+_AMPM_BOUNDARY = ["It", "Thus", "Monitor", "Money", "Friends", "Saturated", "Sunshine", "Wedge"]
+
+
+@pytest.mark.parametrize("follow", _AMPM_CONTINUE)
+def test_sentences_ampm_continues(follow):
+    assert len(compose._sentences(f"Open 8:30 a.m. {follow} and 9 a.m. later.")) == 1
+
+
+@pytest.mark.parametrize("follow", _AMPM_CONTINUE)
+def test_sanitize_ampm_continues_keeps_whole_sentence(follow):
+    # Merged: the keep value 8:30 rescues the sentence that also holds the stale 9. Split: the 9 part is dropped.
+    t = f"Open 8:30 a.m. {follow} and 9 a.m. later."
+    assert sanitize(Answer(t), {"8:30 a.m."}, {"9 a.m."}).text == t
+
+
+@pytest.mark.parametrize("word", _AMPM_BOUNDARY)
+def test_sentences_ampm_boundary(word):
+    t = f"The 60-month rate is 5.39% at the branch open until 5 p.m. {word} it was 5.34% before."
+    assert len(compose._sentences(t)) == 2
+
+
+@pytest.mark.parametrize("word", _AMPM_BOUNDARY)
+def test_sanitize_ampm_boundary_drops_stale(word):
+    t = f"The 60-month rate is 5.39% at the branch open until 5 p.m. {word} it was 5.34% before."
+    out = sanitize(Answer(t), {"5.39%"}, {"5.34%"}).text
+    assert "5.34" not in out and "5.39%" in out
+
+
+@pytest.mark.parametrize("t", ["Lobby hours are 8:30 a.m. - 5:00 p.m. Monday-Friday.",
+                               "Open 8:30 a.m. Saturday 9 a.m. Monday-Friday.",
+                               "Open 8:30 a.m. Wednesday 9 a.m. Mon-Fri.",
+                               "Open 8:30 a.m. Mon-Fri and 9 a.m. Saturday.",
+                               "Visit 123 Main St. Dubuque for help."])
+def test_sentences_one_sentence(t):
+    assert compose._sentences(t) == [t]
+
+
+def test_sanitize_saturday_hours_intact():
+    t = "Open 8:30 a.m. Saturday 9 a.m. Monday-Friday."
+    assert sanitize(Answer(t), {"8:30 a.m."}, {"9 a.m."}).text == t
+
+
+def test_sentences_splits_after_no():
+    assert compose._sentences("Is there a fee? No. The fee is $5.") == ["Is there a fee?", "No.", "The fee is $5."]
 
 
 def test_sanitize_splits_after_no():
