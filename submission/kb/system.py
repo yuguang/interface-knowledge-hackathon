@@ -5,6 +5,7 @@ import collections
 import hashlib
 import logging
 import os
+import re
 import traceback
 from dataclasses import asdict
 from pathlib import Path
@@ -15,7 +16,7 @@ from contract import Answer, Conflict, Snapshot, Source
 from . import classify, compose, conflicts as conflicts_mod, intent, normalize, resolve
 from .extract import llm_facts, regex, tables
 from .llm import LLM
-from .model import PageContext
+from .model import AUTHORITY, Chunk, Intent, PageContext, PageInfo, chunk_hash
 from .retrieval.pipeline import Retriever
 from .snapshots import SnapshotRegistry, effective_as_of
 from .store import Store
@@ -23,6 +24,8 @@ from .store import Store
 ROOT = Path(__file__).resolve().parent.parent  # submission/
 CACHE_DIR = ROOT / ".cache"
 log = logging.getLogger("kb")
+_REFUSAL_TEXT = ("That isn't listed on the website, so I can't confirm it. "
+                 "Please contact Dupaco directly for this information.")
 
 
 def db_path() -> Path:
@@ -53,59 +56,146 @@ class KnowledgeSystem:
         log.error("stage %s failed (%s)\n%s", stage, context, traceback.format_exc())
 
     def ingest(self, snapshot: Snapshot) -> None:
+        """Fail-soft per stage (R14): the harness does not guard ingest, so one bad page never aborts it."""
         sid = snapshot.snapshot_id
         self.registry.add(sid, snapshot.taken_on)
         self.store.add_snapshot(sid, snapshot.taken_on)
-        bp = normalize.fit_boilerplate(snapshot.pages)
+        try:
+            bp = normalize.fit_boilerplate(snapshot.pages)
+        except Exception:
+            self._fail("fit_boilerplate", sid)
+            bp = frozenset()
         for page in sorted(snapshot.pages, key=lambda p: p.url):
-            info = classify.classify_page(page.url, page.title, page.markdown, snapshot.taken_on)
-            md = normalize.clean(page.markdown, bp)
-            page_id = self.store.add_page(sid, page.url, page.title, info, hashlib.sha256(md.encode("utf-8")).hexdigest())
-            stored = self.store.add_chunks(sid, page_id, normalize.chunk_page(page.url, page.title, md))
-            ctx = PageContext(sid, snapshot.taken_on, page.url, page.title, info, md, stored)
-            obs = []
-            for name, fn in (("tables", lambda: tables.extract(ctx)), ("regex", lambda: regex.extract(ctx)),
-                             ("llm_facts", lambda: llm_facts.extract(ctx, self.llm))):
-                try:
-                    obs += fn()
-                except Exception:  # one failing extractor must not abort ingest or drop the others' facts
-                    self._fail(name, page.url)
-            self.store.add_facts(obs)
-        self.store.set_resolved(sid, resolve.resolve_snapshot(self.store, sid))
-        self.retriever.index_snapshot(sid)
+            try:
+                self._ingest_page(sid, snapshot.taken_on, page, bp)
+            except Exception:  # last resort: a store-level failure on one page skips only that page
+                self._fail("page", page.url)
+        try:
+            resolved = resolve.resolve_snapshot(self.store, sid)
+        except Exception:
+            self._fail("resolve", sid)
+            resolved = []
+        self.store.set_resolved(sid, resolved)
+        try:
+            self.retriever.index_snapshot(sid)
+        except Exception:  # FTS search still works without the extra index
+            self._fail("index_snapshot", sid)
         self._conflicts = None
+
+    def _ingest_page(self, sid: str, taken_on: str, page, bp: frozenset) -> None:
+        try:
+            info = classify.classify_page(page.url, page.title, page.markdown, taken_on)
+        except Exception:
+            self._fail("classify", page.url)
+            info = PageInfo("other", AUTHORITY["other"], None)
+        try:
+            md = normalize.clean(page.markdown, bp)
+        except Exception:
+            self._fail("clean", page.url)
+            md = page.markdown
+        try:
+            chunks = normalize.chunk_page(page.url, page.title, md)
+        except Exception:
+            self._fail("chunk", page.url)
+            chunks = _fallback_chunks(page.url, page.title, md)
+        page_id = self.store.add_page(sid, page.url, page.title, info, hashlib.sha256(md.encode("utf-8")).hexdigest())
+        stored = self.store.add_chunks(sid, page_id, chunks)
+        ctx = PageContext(sid, taken_on, page.url, page.title, info, md, stored)
+        obs = []
+        for name, fn in (("tables", lambda: tables.extract(ctx)), ("regex", lambda: regex.extract(ctx)),
+                         ("llm_facts", lambda: llm_facts.extract(ctx, self.llm))):
+            try:
+                obs += fn()
+            except Exception:  # one failing extractor must not abort ingest or drop the others' facts
+                self._fail(name, page.url)
+        self.store.add_facts(obs)
+
+    def _refusal(self, question: str) -> Answer:
+        try:
+            return compose.refusal(question)
+        except Exception:
+            self._fail("refusal", question[:80])
+            return Answer(text=_REFUSAL_TEXT, confident=False)
 
     def answer(self, question: str, as_of: Optional[str] = None) -> Answer:
         try:
             return self._answer(question, as_of)
-        except Exception:
+        except Exception:  # last resort; each stage below already degrades on its own
             self._fail("answer", question[:80])
-            try:
-                return compose.refusal(question)
-            except Exception:
-                return Answer(text="That isn't listed on the website, so I can't confirm it. "
-                                   "Please contact Dupaco directly for this information.", confident=False)
+            return self._refusal(question)
 
     def _answer(self, question: str, as_of: Optional[str]) -> Answer:
+        """Each stage degrades on its own (R14); a degraded answer is not memoised."""
+        q80 = question[:80]
+        degraded = False
         sid = self.registry.resolve(effective_as_of(question, as_of))
-        it = intent.parse(question, self.llm)
+        try:
+            it = intent.parse(question, self.llm)
+        except Exception:
+            self._fail("intent", q80)
+            degraded = True
+            it = Intent("prose", None, None, {}, None, question, question.lower().strip())
         memo = self.store.memo_get(it.canonical, sid)
         if memo is not None:
             return _answer_from_dict(memo)
-        sel = resolve.select_for_intent(it, self.store.resolved(sid, it.product, it.attribute)) if it.product else []
+        sel = []
+        if it.product:
+            try:
+                sel = resolve.select_for_intent(it, self.store.resolved(sid, it.product, it.attribute))
+            except Exception:
+                self._fail("select", q80)
+                degraded = True
+                sel = []
+        ans = None
         if sel:
-            ans = compose.render_facts(question, it, sel, sid)
-        else:
-            picked = self.retriever.pick(it.cleaned_question, self.retriever.search(it.cleaned_question, sid))
-            ans = compose.render_prose(question, it, picked, sid, self.llm) if picked else compose.refusal(question)
-        ans = compose.sanitize(ans, keep={r.value for r in sel}, drop=resolve.stale_values(self.store, sel))
-        self.store.memo_put(it.canonical, sid, asdict(ans))
+            try:
+                ans = compose.render_facts(question, it, sel, sid)
+            except Exception:  # fall through to the retrieval path
+                self._fail("render_facts", q80)
+                degraded = True
+        if ans is None:
+            try:
+                picked = self.retriever.pick(it.cleaned_question, self.retriever.search(it.cleaned_question, sid))
+                ans = compose.render_prose(question, it, picked, sid, self.llm) if picked else self._refusal(question)
+            except Exception:
+                self._fail("retrieval", q80)
+                degraded = True
+                ans = self._refusal(question)
+        try:
+            drop = resolve.stale_values(self.store, sel)
+        except Exception:
+            self._fail("stale_values", q80)
+            degraded = True
+            drop = set()
+        try:
+            ans = compose.sanitize(ans, keep={r.value for r in sel}, drop=drop)
+        except Exception:  # can't strip stale values: refuse rather than risk stating one
+            self._fail("sanitize", q80)
+            degraded = True
+            if drop:
+                ans = self._refusal(question)
+        if not degraded:
+            self.store.memo_put(it.canonical, sid, asdict(ans))
         return ans
 
     def conflicts(self) -> list[Conflict]:
         if self._conflicts is None:
-            self._conflicts = conflicts_mod.build_conflicts(self.store, self.registry)
+            try:
+                self._conflicts = conflicts_mod.build_conflicts(self.store, self.registry)
+            except Exception:  # not cached: a later call retries
+                self._fail("conflicts", "build_conflicts")
+                return []
         return self._conflicts
+
+
+def _fallback_chunks(url: str, title: str, cleaned: str) -> list[Chunk]:
+    """Paragraph chunker used when the real chunker fails (same behaviour as the Stage 1 stub)."""
+    out = []
+    for para in re.split(r"\n\s*\n", cleaned):
+        text = para.strip()
+        if text:
+            out.append(Chunk(chunk_hash(url, text), url, title, "", text))
+    return out
 
 
 def build() -> KnowledgeSystem:

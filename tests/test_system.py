@@ -42,14 +42,15 @@ def test_build_resets_db(tmp_path):
     assert ks2.store.fact_keys() == [] and ks2.store.live_urls("x") == set()
 
 
-def test_stage_exception_yields_refusal(monkeypatch):
-    ks = _ks()
+def _boom(*a, **k):
+    raise RuntimeError("x")
 
-    def boom(*a, **k):
-        raise RuntimeError("x")
-    monkeypatch.setattr(intent, "parse", boom)
+
+def test_unguarded_failure_yields_refusal(monkeypatch):
+    ks = _ks()
+    monkeypatch.setattr(ks.registry, "resolve", _boom)  # outside any per-stage guard -> outer catch-all
     a = ks.answer(Q)
-    assert a.confident is False and not a.sources
+    assert a.confident is False and not a.sources and ks.stage_errors["answer"] == 1
 
 
 def test_extractor_failure_keeps_other_facts(monkeypatch):
@@ -71,11 +72,131 @@ def test_extractor_failure_keeps_other_facts(monkeypatch):
 
 def test_answer_failure_is_logged(monkeypatch, caplog):
     ks = _ks()
-
-    def boom(*a, **k):
-        raise RuntimeError("x")
-    monkeypatch.setattr(intent, "parse", boom)
+    monkeypatch.setattr(ks.registry, "resolve", _boom)
     with caplog.at_level("ERROR", logger="kb"):
         a = ks.answer(Q)
     assert a.confident is False and ks.stage_errors["answer"] == 1
     assert any("RuntimeError" in r.getMessage() for r in caplog.records)
+
+
+# --- F3 (R14): per-stage degradation ---
+
+def test_classify_failure_page_still_chunked_and_searchable(monkeypatch):
+    from kb import classify
+    monkeypatch.setattr(classify, "classify_page", _boom)
+    ks = _ks()
+    assert ks.stage_errors["classify"] > 0
+    a = ks.answer(Q)
+    assert a.sources
+
+
+def test_clean_and_chunk_failure_fall_back(monkeypatch):
+    from kb import normalize
+    monkeypatch.setattr(normalize, "fit_boilerplate", _boom)
+    monkeypatch.setattr(normalize, "clean", _boom)
+    monkeypatch.setattr(normalize, "chunk_page", _boom)
+    ks = _ks()
+    assert ks.stage_errors["fit_boilerplate"] == len(_mini()) and ks.stage_errors["clean"] > 0 and ks.stage_errors["chunk"] > 0
+    assert ks.answer(Q).sources
+
+
+def test_resolve_and_index_failure_answer_still_has_sources(monkeypatch):
+    from kb import resolve
+    from kb.retrieval.pipeline import Retriever
+    monkeypatch.setattr(Retriever, "index_snapshot", _boom)
+    monkeypatch.setattr(resolve, "resolve_snapshot", _boom)
+    ks = _ks()
+    assert ks.stage_errors["index_snapshot"] == ks.stage_errors["resolve"] == len(_mini())
+    assert ks.answer(Q).sources
+
+
+def test_intent_failure_uses_retrieval_not_refusal(monkeypatch):
+    ks = _ks()
+    monkeypatch.setattr(intent, "parse", _boom)
+    a = ks.answer(Q)
+    assert a.sources and ks.stage_errors["intent"] == 1 and not ks.stage_errors["answer"]
+
+
+def _fact_ks(monkeypatch):
+    """A system whose intent selects a resolved fact, so the facts path runs."""
+    from kb import resolve
+    from kb.model import FactObs, Intent, ResolvedFact
+    ks = _ks()
+    obs = FactObs("auto_loan|apr|term=60", "auto_loan", "apr", {"term": "60"}, "5.39%", "5.39%",
+                  "05_x", "2026-09-28", "https://example.com/rates", "rate_sheet", 100, None, "60 mo 5.39%", "table")
+    rf = ResolvedFact(obs.fact_key, "5.39%", obs, [], "authority")
+    monkeypatch.setattr(intent, "parse", lambda q, llm=None: Intent("fact", "auto_loan", "apr", {"term": "60"}, None,
+                                                                   q, "auto_loan|apr|term=60"))
+    monkeypatch.setattr(resolve, "select_for_intent", lambda it, res: [rf])
+    return ks
+
+
+def test_render_facts_failure_falls_through_to_retrieval(monkeypatch):
+    from kb import compose
+    ks = _fact_ks(monkeypatch)
+    monkeypatch.setattr(compose, "render_facts", _boom)
+    a = ks.answer(Q)
+    assert a.sources and ks.stage_errors["render_facts"] == 1
+
+
+def test_select_failure_uses_retrieval(monkeypatch):
+    from kb import resolve
+    ks = _fact_ks(monkeypatch)
+    monkeypatch.setattr(resolve, "select_for_intent", _boom)
+    a = ks.answer(Q)
+    assert a.sources and ks.stage_errors["select"] == 1
+
+
+def test_retrieval_failure_is_refusal(monkeypatch):
+    from kb.retrieval.pipeline import Retriever
+    ks = _ks()
+    monkeypatch.setattr(Retriever, "search", _boom)
+    a = ks.answer(Q)
+    assert a.confident is False and not a.sources and ks.stage_errors["retrieval"] == 1
+
+
+def test_sanitize_failure_empty_drop_keeps_answer(monkeypatch):
+    from kb import compose
+    ks = _ks()
+    monkeypatch.setattr(compose, "sanitize", _boom)
+    a = ks.answer(Q)
+    assert a.sources and ks.stage_errors["sanitize"] == 1
+
+
+def test_sanitize_failure_with_stale_values_refuses(monkeypatch):
+    from kb import compose, resolve
+    ks = _fact_ks(monkeypatch)
+    monkeypatch.setattr(resolve, "stale_values", lambda store, sel: {"4.99%"})
+    monkeypatch.setattr(compose, "sanitize", _boom)
+    a = ks.answer(Q)
+    assert a.confident is False and not a.sources
+
+
+def test_stale_values_failure_is_empty_set(monkeypatch):
+    from kb import compose, resolve
+    ks = _fact_ks(monkeypatch)
+    seen = {}
+    monkeypatch.setattr(resolve, "stale_values", _boom)
+
+    def spy(ans, keep, drop):
+        seen["drop"] = drop
+        return ans
+    monkeypatch.setattr(compose, "sanitize", spy)
+    a = ks.answer(Q)
+    assert seen["drop"] == set() and a.text == "5.39%" and ks.stage_errors["stale_values"] == 1
+
+
+def test_degraded_answer_not_memoised(monkeypatch):
+    ks = _ks()
+    monkeypatch.setattr(intent, "parse", _boom)
+    ks.answer(Q)
+    assert ks.store.memo_get(Q.lower().strip(), ks.registry.resolve(None)) is None
+
+
+def test_conflicts_failure_is_empty_and_not_cached(monkeypatch):
+    from kb import conflicts as conflicts_mod
+    ks = _ks()
+    monkeypatch.setattr(conflicts_mod, "build_conflicts", _boom)
+    assert ks.conflicts() == [] and ks.stage_errors["conflicts"] == 1
+    monkeypatch.setattr(conflicts_mod, "build_conflicts", lambda store, reg: ["c"])
+    assert ks.conflicts() == ["c"]
