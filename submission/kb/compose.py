@@ -24,8 +24,8 @@ _PRODUCT_LABEL = {
 _BANNED = re.compile(r"in these facts|context|would you like", re.I)
 _SPLIT = re.compile(r"(?<=[.!?])\s+")
 _AMPM_END = re.compile(r"\b[ap]\.m\.$", re.I)
-_ABBR_END = re.compile(r"\b(?:St|Ave|Blvd|Rd|Dr|Ste|Mt|Ft|Mr|Mrs|Ms|Jr|Sr|Hwy)\.$")
-_DAY_START = re.compile(r"(?:mon|tue|wed|thu|fri|sat|sun)", re.I)
+_ABBR_END = re.compile(r"\b(?:St|Ave|Blvd|Rd|Dr|Ste|Mt|Ft|Mr|Mrs|Ms|Jr|Sr|Hwy)\.$", re.I)
+_DAY_START = re.compile(r"(?:mon|tues?|wed|thu(?:rs?)?|fri|sat|sun)(?:day)?\b", re.I)
 
 
 def _continues(prev: str, nxt: str) -> bool:

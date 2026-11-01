@@ -1,3 +1,4 @@
+import pytest
 from contract import Answer
 from scoring import REFUSAL_RE, _numbers, contains
 
@@ -140,10 +141,16 @@ def test_sanitize_does_not_split_abbreviations():
     assert sanitize(Answer(t), set(), {"$9"}).text == t
 
 
-def test_sanitize_ampm_sentence_end_still_drops_stale():
-    t = "The 60-month rate is 5.39% at the branch open until 5 p.m. It was 5.34% before."
+@pytest.mark.parametrize("lead", ["It was", "Thus it was", "Monitor rates were"])
+def test_sanitize_ampm_sentence_end_still_drops_stale(lead):
+    t = f"The 60-month rate is 5.39% at the branch open until 5 p.m. {lead} 5.34% before."
     out = sanitize(Answer(t), {"5.39%"}, {"5.34%"}).text
     assert "5.34" not in out and "5.39%" in out
+
+
+def test_sanitize_mon_fri_abbreviation_intact():
+    t = "Open 8:30 a.m. Mon-Fri and 9 a.m. Saturday."
+    assert sanitize(Answer(t), set(), {"$9"}).text == t
 
 
 def test_sanitize_splits_after_no():
