@@ -50,3 +50,32 @@ def test_stage_exception_yields_refusal(monkeypatch):
     monkeypatch.setattr(intent, "parse", boom)
     a = ks.answer(Q)
     assert a.confident is False and not a.sources
+
+
+def test_extractor_failure_keeps_other_facts(monkeypatch):
+    from kb.extract import llm_facts, tables
+    from kb.model import FactObs
+
+    def one_fact(ctx):
+        return [FactObs("auto_loan|apr|-", "auto_loan", "apr", {}, "5%", "5.00%", ctx.snapshot_id, ctx.taken_on,
+                        ctx.url, "other", 40, None, "q", "table")] if ctx.url.endswith("/") else []
+
+    def boom(*a, **k):
+        raise RuntimeError("x")
+    monkeypatch.setattr(tables, "extract", one_fact)
+    monkeypatch.setattr(llm_facts, "extract", boom)
+    ks = _ks()
+    assert ks.store.fact_keys()
+    assert ks.stage_errors["llm_facts"] > 0 and not ks.stage_errors["tables"]
+
+
+def test_answer_failure_is_logged(monkeypatch, caplog):
+    ks = _ks()
+
+    def boom(*a, **k):
+        raise RuntimeError("x")
+    monkeypatch.setattr(intent, "parse", boom)
+    with caplog.at_level("ERROR", logger="kb"):
+        a = ks.answer(Q)
+    assert a.confident is False and ks.stage_errors["answer"] == 1
+    assert any("RuntimeError" in r.getMessage() for r in caplog.records)

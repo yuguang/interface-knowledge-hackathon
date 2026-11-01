@@ -1,8 +1,11 @@
 """KnowledgeSystem orchestrator. Owns all glue between stages; stage tracks never edit this file."""
 from __future__ import annotations
 
+import collections
 import hashlib
+import logging
 import os
+import traceback
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
@@ -19,6 +22,7 @@ from .store import Store
 
 ROOT = Path(__file__).resolve().parent.parent  # submission/
 CACHE_DIR = ROOT / ".cache"
+log = logging.getLogger("kb")
 
 
 def db_path() -> Path:
@@ -42,6 +46,11 @@ class KnowledgeSystem:
         self.llm = LLM(llm_cache)
         self.retriever = Retriever(self.store, self.llm, Path(db).parent / "index")
         self._conflicts: Optional[list[Conflict]] = None
+        self.stage_errors: collections.Counter = collections.Counter()
+
+    def _fail(self, stage: str, context: str) -> None:
+        self.stage_errors[stage] += 1
+        log.error("stage %s failed (%s)\n%s", stage, context, traceback.format_exc())
 
     def ingest(self, snapshot: Snapshot) -> None:
         sid = snapshot.snapshot_id
@@ -54,10 +63,13 @@ class KnowledgeSystem:
             page_id = self.store.add_page(sid, page.url, page.title, info, hashlib.sha256(md.encode("utf-8")).hexdigest())
             stored = self.store.add_chunks(sid, page_id, normalize.chunk_page(page.url, page.title, md))
             ctx = PageContext(sid, snapshot.taken_on, page.url, page.title, info, md, stored)
-            try:
-                obs = tables.extract(ctx) + regex.extract(ctx) + llm_facts.extract(ctx, self.llm)
-            except Exception:
-                continue  # one bad page must not abort ingest
+            obs = []
+            for name, fn in (("tables", lambda: tables.extract(ctx)), ("regex", lambda: regex.extract(ctx)),
+                             ("llm_facts", lambda: llm_facts.extract(ctx, self.llm))):
+                try:
+                    obs += fn()
+                except Exception:  # one failing extractor must not abort ingest or drop the others' facts
+                    self._fail(name, page.url)
             self.store.add_facts(obs)
         self.store.set_resolved(sid, resolve.resolve_snapshot(self.store, sid))
         self.retriever.index_snapshot(sid)
@@ -67,6 +79,7 @@ class KnowledgeSystem:
         try:
             return self._answer(question, as_of)
         except Exception:
+            self._fail("answer", question[:80])
             try:
                 return compose.refusal(question)
             except Exception:
