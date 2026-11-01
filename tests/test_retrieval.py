@@ -358,6 +358,7 @@ def test_real_index_time(real_index):
 
 
 @pytest.mark.real
+@pytest.mark.skipif(os.environ.get("KB_RUN_RECALL") != "1", reason="~7 min (builds the real dense index); set KB_RUN_RECALL=1")
 def test_real_recall(request):
     probe = ROOT / "dev" / "retrieval_probe.jsonl"
     if not probe.exists():  # checked before building the (slow) real index
