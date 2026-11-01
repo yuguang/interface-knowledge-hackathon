@@ -344,7 +344,7 @@ Each track: own branch `track/<letter>-<name>`, own module, own test file. Real-
 
 Values from spec: boilerplate = a line appearing on ≥ 20% of the snapshot's pages; drop image markup, link targets (keep link text), reCAPTCHA blocks, VIN inventory rows; split on headings at ≤ 1,500 chars; **never split a table** and repeat the header row in every chunk of a long table; prefix `title > heading path` into `text`; `hash = model.chunk_hash(url, text)` (identity is per URL — ruling R6).
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 ```python
 def test_boilerplate_threshold():  # line on 3 of 10 pages kept-out (≥20%), line on 1 of 10 kept
 def test_clean_strips_images_and_links(): assert clean("![x](a.png) see [rates](https://x/y)", frozenset()) == "see rates"
@@ -354,10 +354,10 @@ def test_chunk_max_len():          # all len(c.text) <= 1500 + len(prefix) for p
 @pytest.mark.real
 def test_real_dedup_ratio(real_snapshots):  # distinct chunk hashes across 5 snapshots: record the count in the report and assert <= 30,000 (11,777 was measured with text-only hashing; per-URL hashing yields more — re-baseline here and tell Track G)
 ```
-- [ ] **Step 2:** `pytest tests/test_normalize.py -v` → FAIL.
-- [ ] **Step 3:** Implement. Recaptcha/VIN detection: drop lines matching `recaptcha|g-recaptcha` and table rows containing a 17-char VIN `[A-HJ-NPR-Z0-9]{17}`.
-- [ ] **Step 4:** `pytest tests/test_normalize.py -v` → PASS.
-- [ ] **Step 5:** Commit `feat(normalize): boilerplate stripping and table-safe chunker`.
+- [x] **Step 2:** `pytest tests/test_normalize.py -v` → FAIL.
+- [x] **Step 3:** Implement. Recaptcha/VIN detection: drop lines matching `recaptcha|g-recaptcha` and table rows containing a 17-char VIN `[A-HJ-NPR-Z0-9]{17}`.
+- [x] **Step 4:** `pytest tests/test_normalize.py -v` → PASS.
+- [x] **Step 5:** Commit `feat(normalize): boilerplate stripping and table-safe chunker`.
 
 ### Track B: Page classifier
 
@@ -366,7 +366,7 @@ def test_real_dedup_ratio(real_snapshots):  # distinct chunk hashes across 5 sna
 
 URL rules (first match wins): host `info.dupaco.com` → `legacy`; path contains `/calculators/` or `-calculator` → `calculator`; `/news/`, `/press`, `/about/news` → `news`; `/learn/blog/`, `/YYYY/MM/DD/` → `blog`; `.pdf` or `/disclosures` → `disclosure`; path ends in `rates` or page has ≥ 1 table whose header contains APR/APY/Dividend and title contains "Rates" → `rate_sheet`; `/locations/` or `/branches/` → `branch`; `/promo`, `/special`, or title contains "Special" without a rate table → `promo`; `/personal/` or `/business/` → `product`; else `other`. `page_date`: first match of "effective (as of )?<date>", "Rates are effective as of MM/DD/YYYY", rate generation date, or a blog/press URL date → ISO.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 ```python
 @pytest.mark.parametrize("url,t",[("https://info.dupaco.com/auto","legacy"),("https://www.dupaco.com/calculators/auto-refinance","calculator"),
   ("https://www.dupaco.com/2018/09/25/understand-insurance-deductibles/","blog"),("https://www.dupaco.com/personal/loans/auto-loans","product"),
@@ -377,8 +377,8 @@ def test_authority_order(): assert AUTHORITY["rate_sheet"] > AUTHORITY["product"
 @pytest.mark.real
 def test_real_histogram(real_snapshots):  # snapshot 05: every PAGE_TYPE except promo has ≥1 page; "other" < 40% of pages
 ```
-- [ ] **Step 2–4:** run `pytest tests/test_classify.py -v` → FAIL; implement; → PASS.
-- [ ] **Step 5:** Commit `feat(classify): url/page-type authority and page dates`.
+- [x] **Step 2–4:** run `pytest tests/test_classify.py -v` → FAIL; implement; → PASS.
+- [x] **Step 5:** Commit `feat(classify): url/page-type authority and page dates`.
 
 ### Track C1: Rate-table extractor
 
@@ -387,7 +387,7 @@ def test_real_histogram(real_snapshots):  # snapshot 05: every PAGE_TYPE except 
 
 Header → qualifier mapping: `Term`→`term` (months), `Balance Tier|Balance|Tier`→`tier` (band via `norm_band`), `Minimum Balance|Min. to Earn|Minimum Deposit` with a bare amount cell → `tier` via `norm_band(cell, minimum=True)` (`"$100,000"`→`"100000-inf"`), `Loan Amount`→`loan_amount` (band), `Loan Program|Model Year`→`model_year`; value columns: `APR|Annual Percentage Rate`→`apr`, `APY|Annual Percentage Yield`→`apy`, `Rate|Dividend Rate|Interest Rate`→`rate`. Product from page URL/title + nearest heading (`auto` → `auto_loan`, `mortgage|home loan` + "fixed" → `mortgage_fixed`, "Jumbo" in row/heading → `kind=jumbo`, "Special" → `certificate_special`, `/business/` → `segment=business` else `segment=personal`). Tables with no value column are skipped (amortisation tables). `quote` = the table row text, ≤ 200 chars.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 ```python
 AUTO = "## Rates\n| Loan Program | Term | Annual Percentage Rate (As Low As) |\n| --- | --- | --- |\n| 2024-27 Model Year | 60 Months | 5.39% APR1 |\n| 2016 Model Year (and older) | 48 Months | 8.59% APR1 |"
 def test_auto_table(): f = by_key(extract(ctx(AUTO, url="https://www.dupaco.com/personal/loans/auto-loans")))
@@ -399,8 +399,8 @@ def test_amortisation_table_ignored(): # "| Category | Interest | Principal | Re
 @pytest.mark.real
 def test_real_known_values(real_snapshots):  # snapshot 05 auto page 60-month 2024-27 -> 5.39%; 30-yr fixed $100k tier rate -> 7.13%
 ```
-- [ ] **Step 2–4:** `pytest tests/test_extract_tables.py -v` FAIL → implement → PASS.
-- [ ] **Step 5:** Commit `feat(extract): markdown rate-table extractor`.
+- [x] **Step 2–4:** `pytest tests/test_extract_tables.py -v` FAIL → implement → PASS.
+- [x] **Step 5:** Commit `feat(extract): markdown rate-table extractor`.
 
 ### Track C2: Regex extractors
 
@@ -409,7 +409,7 @@ def test_real_known_values(real_snapshots):  # snapshot 05 auto page 60-month 20
 
 Targets: hours (`hours_lobby`/`hours_driveup`, qualifier `day` ∈ `mon-fri|sat|sun`, value in site format e.g. "8:30 a.m. - 5:00 p.m.", "noon" kept as "noon"), address (street + city + IA/IL/WI + 5-digit ZIP, `name=<branch slug>`), phone, routing number (9 digits passing ABA checksum `3(d1+d4+d7)+7(d2+d5+d8)+(d3+d6+d9) ≡ 0 mod 10`; product `org` only when the sentence names Dupaco), counts (`org|count|what=branches`), closure dates ("will close … March 31, 2026" → `branch|closure_date`), awards ("Forbes … fifth" → `org|award|name=forbes`), program amounts (Home$tart "$15,000" → `program|detail|name=homestart`).
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 ```python
 def test_routing_checksum(): assert routing(extract(ctx("Dupaco routing number: 273974581"))) == "273974581"
 def test_other_institution_routing_not_org(): # "Home Savings Bank routing number 271176899" -> no org|routing_number obs
@@ -417,8 +417,8 @@ def test_hours_noon():  # "Saturday: 8:30 a.m. - noon" -> branch|hours_lobby|day
 def test_closure_date(): # "The Hy-Vee branch will close March 31, 2026" -> closure_date "March 31, 2026"
 def test_branch_count(): # "22 branches" -> org|count|what=branches == "22"
 ```
-- [ ] **Step 2–4:** `pytest tests/test_extract_regex.py -v` FAIL → implement → PASS.
-- [ ] **Step 5:** Commit `feat(extract): regex extractors for hours, ids, counts, dates`.
+- [x] **Step 2–4:** `pytest tests/test_extract_regex.py -v` FAIL → implement → PASS.
+- [x] **Step 5:** Commit `feat(extract): regex extractors for hours, ids, counts, dates`.
 
 ### Track D: LLM prose-fact extractor and committed cache
 
@@ -427,15 +427,15 @@ def test_branch_count(): # "22 branches" -> org|count|what=branches == "22"
 
 Scope: only chunks of pages with `page_type in {product, branch, other, promo}` whose text matches `eligib|Home\$tart|student loan|VTO|award|mobile wallet|Apple Pay|Google Pay|Samsung Pay` — target ≤ 600 chunks total. Haiku with a JSON schema `{facts:[{product, attribute, qualifiers:{}, value}]}` whose `product`/`attribute`/qualifier names are enums from `keys`. Cache line format: `{"chunk_hash":…, "prompt_ver":"v1", "facts":[…]}` — **no quote, no page text**; at ingest, cache lookup first, `quote` re-derived from the chunk. Ingest time budget: if cumulative LLM time in this snapshot > 300 s, skip remaining calls.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 ```python
 def test_cache_hit_no_llm(tmp_cache): # chunk_hash present in cache -> FactObs returned, LLM mock not called
 def test_invalid_key_dropped():       # LLM returns attribute "colour" -> dropped, no exception
 def test_llm_none_returns_empty():    # LLM.json -> None -> []
 def test_cache_has_no_page_text():    # every line of submission/data/facts_cache.jsonl has keys {chunk_hash,prompt_ver,facts} only
 ```
-- [ ] **Step 2–4:** `pytest tests/test_extract_llm.py -v` FAIL → implement → PASS.
-- [ ] **Step 5:** Run `python dev/build_facts_cache.py --snapshots snapshots` (all 5 snapshots, 8-way concurrency); expect ≤ 600 calls, < 5 min. Commit code + `facts_cache.jsonl`: `feat(extract): haiku prose facts with committed cache`.
+- [x] **Step 2–4:** `pytest tests/test_extract_llm.py -v` FAIL → implement → PASS.
+- [ ] **Step 5:** Run `python dev/build_facts_cache.py --snapshots snapshots` (all 5 snapshots, 8-way concurrency); expect ≤ 600 calls, < 5 min. Commit code + `facts_cache.jsonl`: `feat(extract): haiku prose facts with committed cache`. *(Deferred to Task 3.2 (ruling R25): the code and an empty `facts_cache.jsonl` are committed; the real build runs at the start of 3.2.)*
 
 ### Track E: Resolver and intent selection
 
@@ -448,7 +448,7 @@ Policy (PROJECT_PLAN §2.3), per fact key over observations in the target snapsh
 
 `stale_values`: every `value_norm` observed for the selected keys in any snapshot, minus the selected values.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 ```python
 def test_calculator_loses():   # rate page 5.39% vs calculator 5.34% same key, same snapshot -> value "5.39%", rule startswith "authority"
 def test_dead_url_ignored():   # obs only on a url not live in the snapshot -> not resolved
@@ -458,8 +458,8 @@ def test_highest_tier():       # superlative highest over current tiers -> "0.20
 def test_mortgage_headline():  # no loan_amount -> 100k-band 30-yr (7.13%) and 15-yr (6.25%) only
 def test_stale_values():       # selected 5.39% -> stale_values contains "5.34%" and not "5.39%"
 ```
-- [ ] **Step 2–4:** `pytest tests/test_resolve.py -v` FAIL → implement → PASS.
-- [ ] **Step 5:** Commit `feat(resolve): authority policy, tier selection, stale sets`.
+- [x] **Step 2–4:** `pytest tests/test_resolve.py -v` FAIL → implement → PASS.
+- [x] **Step 5:** Commit `feat(resolve): authority policy, tier selection, stale sets`.
 
 ### Track F: Conflict builder
 
@@ -468,15 +468,15 @@ def test_stale_values():       # selected 5.39% -> stale_values contains "5.34%"
 
 One `Conflict` per fact key with ≥ 2 distinct `value_norm` across all snapshots (time changes and within-snapshot disagreements). `values` = distinct values in first-seen order; `resolution` = the key's resolved value in `registry.latest()` (or last resolved value if the key is gone in 05); `reason` = the within-05 rule if 05 had losers, else `"updated in <first snapshot id with the winning value>"`; `sources` = one `Source(url, snapshot_id, quote)` per distinct value (its highest-authority observation). `topic` = human words from product + attribute + qualifiers, e.g. `"60-month auto loan APR 2024-2027 model year personal"`, `"10-month jumbo certificate special APY"`. Precision filter: skip keys whose only disagreement comes from `extractor` starting `llm:` with a single observation, and keys of attribute `detail`. Output sorted by topic.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 ```python
 def test_one_entry_per_key():   # 3.90% (01,02), 3.95% (03), 4.00% (04,05) -> one Conflict, values ["3.90%","3.95%","4.00%"], resolution "4.00%"
 def test_within_snapshot():     # 5.39% rate page vs 5.34% calculator in 05 -> resolution "5.39%", reason mentions "calculator"
 def test_different_tiers_not_conflict(): # same product, tiers 10000-24999 vs 25000-inf -> []
 def test_scores_against_kit_scorer(): # build on mini fixture, score_conflicts(gold, out)["f1"] == 1.0 for a 2-entry hand gold
 ```
-- [ ] **Step 2–4:** `pytest tests/test_conflicts.py -v` FAIL → implement → PASS.
-- [ ] **Step 5:** Commit `feat(conflicts): one conflict per fact key`.
+- [x] **Step 2–4:** `pytest tests/test_conflicts.py -v` FAIL → implement → PASS.
+- [x] **Step 5:** Commit `feat(conflicts): one conflict per fact key`.
 
 ### Track G: Hybrid retrieval and section picker
 
@@ -489,7 +489,7 @@ def test_scores_against_kit_scorer(): # build on mini fixture, score_conflicts(g
 - `pipeline.py`: Haystack `Pipeline` with custom components `Fts5Retriever` and `ChromaRetriever` (or `chroma-haystack`'s `ChromaQueryTextRetriever` if it supports the metadata filter) → `DocumentJoiner(join_mode="reciprocal_rank_fusion")` → top k; ties broken by chunk_id. If the Haystack/Chroma path raises, `search` returns FTS-only hits.
 - `picker.py`: `pick_sections(llm, question, hits) -> list[int]` — Haiku, schema `{"chunk_ids":[int], "none_relevant": bool}`, candidate texts truncated to 600 chars each; instruction: pick only sections that state the asked product's value. `Retriever.pick` maps ids back to hits (≤ 2); LLM `None` → `hits[:1]` if `hits[0].score` is the RRF top, else `[]`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 ```python
 def test_match_expr_safe(): assert '"' not in to_match_expr('what\'s the "APR"?').replace('" OR "','')  # no syntax error in sqlite
 def test_snapshot_filter(mini_store): # chunk only in 01 never returned for 05
@@ -501,8 +501,8 @@ def test_real_recall(real_snapshots): # for dev/retrieval_probe.jsonl (from Trac
 @pytest.mark.real
 def test_real_index_time(real_snapshots): # index all 5 snapshots < 600 s
 ```
-- [ ] **Step 2–4:** `pytest tests/test_retrieval.py -v` FAIL → implement → PASS.
-- [ ] **Step 5:** Commit `feat(retrieval): fts5+chroma rrf pipeline with haiku picker`.
+- [x] **Step 2–4:** `pytest tests/test_retrieval.py -v` FAIL → implement → PASS.
+- [x] **Step 5:** Commit `feat(retrieval): fts5+chroma rrf pipeline with haiku picker`.
 
 ### Track H: Intent parser
 
@@ -511,7 +511,7 @@ def test_real_index_time(real_snapshots): # index all 5 snapshots < 600 s
 
 `cleaned_question`: strip chit-chat (greetings, "I'm not asking again", "for my coffee table", sentences without a product/attribute/question word). Synonym tables: CD/certificate/share certificate → `certificate`; "special" → `certificate_special`; APR → `apr`, APY/yield → `apy`, "interest rate"/"dividend" → `rate`; "jumbo" → `kind=jumbo`; "business" → `segment=business` else `personal`; "N-month"/"N year" → `term`; "$X" or "between $X and $Y" → `tier` amount (lower bound); "2025 model year"/"2025 vehicle" → `model_year="2025"` (the year itself; Track E matches it against site bands with `band_contains` — ruling R13); "highest/best" → `superlative="highest"`; "all/list/which … do you offer" → family `list`; hours/address/phone/routing/how many branches → fact family with branch/org product and `name` slug. `canonical = make_key(product or "-", attribute or "-", qualifiers) + "|" + family + "|" + (superlative or "")`; prose family canonical = sorted content words. Rules confidence low (no product found) and `llm` given → Haiku closed-label classification, cached.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 ```python
 def test_auto(): i = parse("What's the APR for a 60-month auto loan on a 2025 model-year vehicle?")
     assert (i.product, i.attribute, i.qualifiers.get("term"), i.qualifiers.get("model_year")) == ("auto_loan","apr","60","2024-2027")
@@ -522,8 +522,8 @@ def test_highest(): assert parse("What's the highest share savings rate?").super
 def test_list_family(): assert parse("Which credit cards do you offer and their APRs?").family == "list"
 def test_unknown_is_prose(): assert parse("Tell me about your community impact").family == "prose"
 ```
-- [ ] **Step 2–4:** `pytest tests/test_intent.py -v` FAIL → implement → PASS.
-- [ ] **Step 5:** Commit `feat(intent): rule-based intent parser with haiku fallback`.
+- [x] **Step 2–4:** `pytest tests/test_intent.py -v` FAIL → implement → PASS.
+- [x] **Step 5:** Commit `feat(intent): rule-based intent parser with haiku fallback`.
 
 ### Track I: Composer, templates, sanitizer, refusal
 
@@ -535,7 +535,7 @@ def test_unknown_is_prose(): assert parse("Tell me about your community impact")
 - `refusal(question)`: `Answer(text="That isn't listed on the website, so I can't confirm it. Please contact Dupaco directly for this information.", confident=False)`.
 - `sanitize`: drop any sentence of `text` containing a number in `drop` and none in `keep` (compare with `scoring._numbers` semantics: value + unit); drop sentences matching `in these facts|context|would you like`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 ```python
 from scoring import contains, REFUSAL_RE, _numbers
 def test_template_matches_scorer(): a = render_facts(q, intent, [rf("5.39%")], "05_…"); assert contains(a.text, "5.39%") and a.sources
@@ -545,8 +545,8 @@ def test_sanitize_drops_stale(): assert "5.34" not in sanitize(Answer("Now 5.39%
 def test_prose_fallback_without_llm(): # llm disabled -> extractive text from hit, source = hit.url
 def test_no_question_back(): # composed prose text has no "?" 
 ```
-- [ ] **Step 2–4:** `pytest tests/test_compose.py -v` FAIL → implement → PASS.
-- [ ] **Step 5:** Commit `feat(compose): templates, prose composer, sanitizer, refusal`.
+- [x] **Step 2–4:** `pytest tests/test_compose.py -v` FAIL → implement → PASS.
+- [x] **Step 5:** Commit `feat(compose): templates, prose composer, sanitizer, refusal`.
 
 ### Track J: Discovery scripts and dev eval fixtures
 
@@ -561,11 +561,11 @@ def test_no_question_back(): # composed prose text has no "?"
 - `refusal_eval.jsonl`: 7/1 ARM, construction loan rate, Mullan Avenue lobby hours + 10 invented products, all `category="should_refuse"`; plus 10 answerable look-alikes that must not refuse.
 - `score_run.sh <label>`: runs `run_eval.py` on public (with `--conflicts-gold dev/conflicts_gold.json --judge`) and on the concatenated dev sets, appends a row to `dev/scores.csv`.
 
-- [ ] **Step 1: Write failing test** `test_fixtures_valid`: every jsonl line has all eval keys; every gold entry has ≥ 2 `values` and a `correct_value` among them; no fixture question string equals a public question.
-- [ ] **Step 2:** `pytest tests/test_dev_fixtures.py -v` → FAIL (files missing).
-- [ ] **Step 3:** Write scripts and fixtures (hand-checked against the snapshots).
-- [ ] **Step 4:** → PASS.
-- [ ] **Step 5:** Commit `chore(dev): discovery scripts and dev eval fixtures`.
+- [x] **Step 1: Write failing test** `test_fixtures_valid`: every jsonl line has all eval keys; every gold entry has ≥ 2 `values` and a `correct_value` among them; no fixture question string equals a public question.
+- [x] **Step 2:** `pytest tests/test_dev_fixtures.py -v` → FAIL (files missing).
+- [x] **Step 3:** Write scripts and fixtures (hand-checked against the snapshots).
+- [x] **Step 4:** → PASS.
+- [x] **Step 5:** Commit `chore(dev): discovery scripts and dev eval fixtures`.
 
 ---
 
