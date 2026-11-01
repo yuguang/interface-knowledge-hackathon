@@ -10,7 +10,7 @@ PRODUCTS = ("auto_loan", "mortgage_fixed", "mortgage_arm", "heloc", "home_equity
             "credit_card", "branch", "org", "program")
 ATTRIBUTES = ("apr", "apy", "rate", "min_balance", "hours_lobby", "hours_driveup", "address", "phone",
               "status", "closure_date", "routing_number", "count", "url", "award", "eligibility", "detail")
-QUALIFIERS = ("term", "tier", "loan_amount", "model_year", "segment", "kind", "name", "day", "what")
+QUALIFIERS = ("term", "tier", "loan_amount", "model_year", "segment", "kind", "name", "day", "what", "year")
 
 
 _RESERVED = (";", "=", "|")
