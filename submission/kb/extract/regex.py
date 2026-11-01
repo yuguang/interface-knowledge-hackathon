@@ -77,7 +77,7 @@ class _Emitter:
 
 _ADDR = re.compile(
     r"(\d{1,5}\s+(?:[NSEW]\.?\s+)?[A-Z0-9][\w.'\- ]{2,40}?)(?:,|\s*\n|\s{2,}|\s)\s*"
-    r"(?:(?:Suite|Ste\.?|Unit)\s*\w+,\s*)?([A-Z][A-Za-z.' ]{2,24}?),\s*(IA|IL|WI)\s+(\d{5})(?:-\d{4})?\b")
+    r"(?:(?:Suite|Ste\.?|Unit)\s*\w+,\s*)?([A-Z][A-Za-z.' ]{2,24}?),\s*(IA|IL|WI),?\s*(\d{5})(?:-\d{4})?\b")
 _STREET_WORD = re.compile(r"\b(St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Blvd|Boulevard|Hwy|Highway|Pkwy|Parkway|Ln|Lane|"
                           r"Way|Court|Ct|Circle|Cir|Pl|Place|Plaza|Trail|Pike|Loop|Square|Sq)\b\.?", re.I)
 _LOCATED = re.compile(r"\blocated at \d{1,5}\s+((?:[NSEW]\.\s+)?[A-Z][\w.' ]{2,40}?)(?:[,;]| and | with | at |\.\s|$)")
@@ -121,10 +121,11 @@ def _norm_time(t: str) -> Optional[str]:
         return None
     if m.group(4):
         return m.group(4).lower()
-    h, mi = int(m.group(1)), m.group(2) or "00"
+    h, mi = int(m.group(1)), m.group(2)
     if not 1 <= h <= 12:
         return None
-    return f"{h}:{mi} {m.group(3).lower()}.m."
+    # keep the site's form: "8 a.m." stays whole-hour, "8:30 a.m." / "8:00 a.m." keep their minutes
+    return f"{h}:{mi} {m.group(3).lower()}.m." if mi else f"{h} {m.group(3).lower()}.m."
 
 
 def _day_quals(d1: str, d2: Optional[str]) -> list[str]:
@@ -178,8 +179,22 @@ def _norm_phone(p: str) -> str:
     return f"{d[:3]}-{d[3:6]}-{d[6:]}"
 
 
+_ADDR_CUE = re.compile(r"\b(?:dupaco|branch|address|located)\b", re.I)
+
+
+def _branch_address_context(lines: list[str], i: int) -> bool:
+    """The address line, or the 3 non-empty lines before it, names a Dupaco branch/address and not an ATM
+    (the contact page lists branches, surcharge-free ATMs; auto-loan pages list car dealers)."""
+    before = [ln for ln in lines[max(0, i - 8):i] if ln.strip()][-3:]
+    if any(re.search(r"\bATMs?\b", ln) for ln in before[-2:]):
+        return False
+    return any(_ADDR_CUE.search(ln) for ln in before + [lines[i]])
+
+
 def _address(em: _Emitter, lines: list[str]) -> None:
     for i, ln in enumerate(lines):
+        if not _branch_address_context(lines, i):
+            continue
         # an address may be split over two lines: "123 Main St" / "City, IA 52001"
         text = ln if i == 0 else lines[i - 1] + " " + ln
         for cand in (ln, text):

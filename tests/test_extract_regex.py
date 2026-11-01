@@ -43,8 +43,8 @@ def test_hours_driveup_block():
     md = "**Lobby**\nMonday-Friday: 9 a.m.–5 p.m.\nSaturday-Sunday: Closed\n**Drive-up** Monday-Friday: 8 a.m.–6 p.m."
     obs = regex.extract(ctx(md))
     d = {(o.attribute, o.qualifiers["day"]): o.value_norm for o in obs}
-    assert d == {("hours_lobby", "mon-fri"): "9:00 a.m. - 5:00 p.m.", ("hours_lobby", "sat"): "Closed",
-                 ("hours_lobby", "sun"): "Closed", ("hours_driveup", "mon-fri"): "8:00 a.m. - 6:00 p.m."}
+    assert d == {("hours_lobby", "mon-fri"): "9 a.m. - 5 p.m.", ("hours_lobby", "sat"): "Closed",
+                 ("hours_lobby", "sun"): "Closed", ("hours_driveup", "mon-fri"): "8 a.m. - 6 p.m."}
 
 
 def test_prose_hours_not_extracted():
@@ -127,3 +127,35 @@ def test_real_routing_counts_awards_all_snapshots():
         awards = {k: v for k, v in by.items() if k.startswith("org|award|")}
         assert awards == {"org|award|name=forbes;year=2023": {"fourth"},
                           "org|award|name=forbes;year=2024": {"fifth"}}, snap.snapshot_id
+
+
+# ---- Stage 2 final fix wave
+
+@pytest.mark.parametrize("raw,norm", [("8 a.m.–6 p.m.", "8 a.m. - 6 p.m."), ("8:30 a.m. - 5:30 p.m.", "8:30 a.m. - 5:30 p.m."),
+                                      ("9am-5pm", "9 a.m. - 5 p.m."), ("8:00 a.m. - 12 p.m.", "8:00 a.m. - 12 p.m.")])
+def test_hours_keep_site_time_form(raw, norm):
+    """dup-066 gold "8 a.m." must survive: whole hours are not rewritten to "8:00 a.m."."""
+    obs = regex.extract(ctx(f"Drive-up\nMonday-Friday: {raw}"))
+    assert [o.value_norm for o in obs if o.attribute == "hours_driveup"] == [norm]
+
+
+def test_address_comma_before_zip_and_context():
+    md = ("### Dupaco Credit Union\n\nDupaco Branch\n\n11375 Oldenburg Ln., Galena, IL, 61036\n\nClosed\n\n"
+          "### Dupaco ATM @ Fareway Food Store\n\nSurcharge-Free ATM\n\n2050 JFK Rd., Dubuque, IA, 52001\n\n"
+          "### Galena Chrysler\n\n937 Galena Square Dr, Galena, IL, 61036")
+    obs = regex.extract(ctx(md, url="https://www.dupaco.com/contact"))
+    assert {o.fact_key: o.value_norm for o in obs if o.attribute == "address"} == {
+        "branch|address|name=galena": "11375 Oldenburg Ln., Galena, IL 61036"}
+
+
+@pytest.mark.real
+def test_real_galena_address_snapshot_05():
+    from kb import classify
+    snap = [s for s in real_snapshots() if s.snapshot_id.startswith("05")][0]
+    vals = set()
+    for p in snap.pages:
+        info = classify.classify_page(p.url, p.title, p.markdown, snap.taken_on)
+        for o in regex.extract(PageContext(snap.snapshot_id, snap.taken_on, p.url, p.title, info, p.markdown, [])):
+            if o.fact_key == "branch|address|name=galena":
+                vals.add(o.value_norm)
+    assert vals == {"11375 Oldenburg Ln., Galena, IL 61036"}
