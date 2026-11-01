@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from typing import Optional
 
 from contract import Answer, Source
 from scoring import _numbers
@@ -56,6 +57,49 @@ def _term_phrase(t: str) -> str:
     return f"{t}-month" if t.isdigit() else t
 
 
+_DAY_WORDS = {"mon-fri": "Monday-Friday", "sat": "Saturday", "sun": "Sunday"}
+_SLUG_WORDS = {"hy-vee": "Hy-Vee"}
+_NAME_FIRST = {"credit_card", "checking", "money_market", "ira", "share_savings", "certificate", "certificate_special"}
+
+
+def _deslug(slug: str) -> str:
+    """"platinum-visa" -> "Platinum Visa", "hy-vee" -> "Hy-Vee"."""
+    if slug in _SLUG_WORDS:
+        return _SLUG_WORDS[slug]
+    return " ".join(w if w[:1].isdigit() else w.capitalize() for w in slug.split("-") if w)
+
+
+def _amount(n: str) -> str:
+    try:
+        v = float(n)
+    except ValueError:
+        return n
+    return f"${v:,.2f}" if v != int(v) else f"${int(v):,}"
+
+
+def _band_text(band: str) -> str:
+    """"25000-inf" -> "$25,000 and up", "10000-24999.99" -> "$10,000-$24,999.99", "0-100000" -> "up to $100,000"."""
+    lo, sep, hi = band.partition("-")
+    if not sep:
+        return band
+    if hi == "inf":
+        return f"{_amount(lo)} and up"
+    if lo in ("0", "0.0"):
+        return f"up to {_amount(hi)}"
+    return f"{_amount(lo)}-{_amount(hi)}"
+
+
+def _model_year_text(band: str) -> str:
+    lo, sep, hi = band.partition("-")
+    if not sep or lo == hi:
+        return lo
+    if lo == "0":
+        return f"{hi} and older"
+    if hi == "9999":
+        return f"{lo} and newer"
+    return band
+
+
 def _subject_parts(key: str) -> tuple[str, str, str, dict]:
     """(prefix adjectives, product label, trailing 'for ...' phrase, qualifiers)."""
     product, attribute, q = parse_key(key)
@@ -66,51 +110,90 @@ def _subject_parts(key: str) -> tuple[str, str, str, dict]:
         pre.append(q["segment"])
     if "kind" in q:
         pre.append(q["kind"])
+    if "name" in q and product in _NAME_FIRST:
+        pre.append(_deslug(q["name"]))
     label = _PRODUCT_LABEL.get(product, product.replace("_", " "))
     if "model_year" in q:
-        post.append(f"{q['model_year']} model-year vehicles")
+        post.append(f"{_model_year_text(q['model_year'])} model-year vehicles")
     if "tier" in q:
-        post.append(f"the {q['tier']} tier")
+        post.append(f"balances of {_band_text(q['tier'])}")
     if "loan_amount" in q:
-        post.append(f"loan amounts of {q['loan_amount']}")
-    if "name" in q:
-        post.append(q["name"])
+        lt = _band_text(q["loan_amount"])
+        post.append(f"loan amounts {lt}" if lt.startswith("up to") else f"loan amounts of {lt}")
+    if "name" in q and product not in _NAME_FIRST:
+        post.append(_deslug(q["name"]))
     if "what" in q:
         post.append(q["what"])
     if "day" in q:
-        post.append(q["day"])
+        post.append(_DAY_WORDS.get(q["day"], q["day"]))
     return " ".join(pre), label, " and ".join(post), q
 
 
-def _line(fact: ResolvedFact) -> str:
-    """One sentence for one fact, using the site's wording (e.g. "as low as 5.39% APR")."""
+def _sentence(s: str) -> str:
+    """End with exactly one period ("5:30 p.m." is not followed by another)."""
+    return s if s.endswith(".") else s + "."
+
+
+def _is_range(v: str) -> bool:
+    return bool(re.search(r"\d\s*%?\s*-\s*\d", v))
+
+
+def _line(fact: ResolvedFact, rate: Optional[ResolvedFact] = None) -> str:
+    """One sentence for one fact, using the site's wording (e.g. "as low as 5.39% APR"). `rate` is the same
+    account's plain rate, shown after its APY/APR for a generic "rate" question."""
     product, attribute, _ = parse_key(fact.fact_key)
     pre, label, post, q = _subject_parts(fact.fact_key)
     v = fact.value
     if attribute in ("apr", "apy"):
         unit = attribute.upper()
+        verb = "" if _is_range(v) else ("as low as " if attribute == "apr" else "up to ")
+        tail = ""
+        if rate is not None:
+            tail = f", with {'a dividend' if attribute == 'apy' else 'an interest'} rate of {rate.value}"
         if product == "auto_loan":
             prefix = f"The {pre + ' ' if pre else ''}{unit}"
             if "model_year" in q:
-                return f"{prefix} for {q['model_year']} model-year vehicles is as low as {v} {unit}."
-            return f"{prefix} for an auto loan is as low as {v} {unit}."
+                return f"{prefix} for {_model_year_text(q['model_year'])} model-year vehicles is {verb}{v} {unit}{tail}."
+            return f"{prefix} for an auto loan is {verb}{v} {unit}{tail}."
         who = f"{pre + ' ' if pre else ''}{label}"
-        verb = "as low as" if attribute == "apr" else "up to"
         extra = f" for {post}" if post else ""
-        return f"The {who} {unit}{extra} is {verb} {v} {unit}."
+        return f"The {who} {unit}{extra} is {verb}{v} {unit}{tail}."
     what = {"rate": "rate", "min_balance": "minimum balance", "hours_lobby": "lobby hours",
             "hours_driveup": "drive-up hours", "address": "address", "phone": "phone number", "status": "status",
             "closure_date": "closure date", "routing_number": "routing number", "count": "count", "url": "web address",
             "award": "award", "eligibility": "eligibility", "detail": "detail"}.get(attribute, attribute.replace("_", " "))
+    verb = "are" if attribute in ("hours_lobby", "hours_driveup") else "is"
     who = f"{pre + ' ' if pre else ''}{label}"
     if product == "branch" and "name" in q:
-        who, post = f"{q['name']} branch", ""
+        who = f"{_deslug(q['name'])} branch"
+        if attribute in ("hours_lobby", "hours_driveup") and "day" in q:
+            return _sentence(f"The {who} {what} {verb} {v} {_DAY_WORDS.get(q['day'], q['day'])}")
+        post = ""
     extra = f" for {post}" if post else ""
-    return f"The {who} {what}{extra} is {v}."
+    return _sentence(f"The {who} {what}{extra} {verb} {v}")
+
+
+def _lines(selected: list[ResolvedFact]) -> list[str]:
+    """One line per fact; an APY/APR fact and the plain rate of the same account share one line."""
+    out, used = [], set()
+    for i, r in enumerate(selected):
+        if i in used:
+            continue
+        p, a, q = parse_key(r.fact_key)
+        partner = None
+        if a in ("apy", "apr"):
+            for j in range(i + 1, len(selected)):
+                pj, aj, qj = parse_key(selected[j].fact_key)
+                if j not in used and aj == "rate" and pj == p and qj == q:
+                    partner = selected[j]
+                    used.add(j)
+                    break
+        out.append(_line(r, partner))
+    return out
 
 
 def render_facts(question: str, intent: Intent, selected: list[ResolvedFact], snapshot_id: str) -> Answer:
-    text = "\n".join(_line(r) for r in selected)
+    text = "\n".join(_lines(selected))
     sources, seen = [], set()
     for r in selected:
         if r.winner.url not in seen:
@@ -142,6 +225,17 @@ def _words(s: str) -> set[str]:
     return {w for w in re.findall(r"[a-z0-9]+", s.lower()) if w not in _STOP}
 
 
+def _strip_prefix(text: str, heading_path: str = "") -> str:
+    """Drop the chunker's first line "Title | Dupaco > Heading > ..." (normalize.chunk_page) from a chunk text."""
+    first, nl, rest = text.partition("\n")
+    if nl and rest.strip():
+        hp = (heading_path or "").strip()
+        if (hp and (first.strip() == hp or first.rstrip().endswith(" > " + hp))) \
+                or (" | " in first and not first.lstrip().startswith("|")):
+            return rest
+    return text
+
+
 def _extractive(question: str, text: str, limit: int = 400) -> str:
     sents = [s.strip() for s in _sentences(" ".join(text.split())) if s.strip()
              and not s.rstrip().endswith("?") and not _BANNED.search(s)]
@@ -165,11 +259,11 @@ def render_prose(question: str, intent: Intent, hits: list[Hit], snapshot_id: st
     top = hits[0]
     sections = "\n\n".join(f"[{h.heading_path}]\n{h.text}" for h in hits[:4])
     out = llm.text(SONNET, _PROSE_SYSTEM, f"Question: {question}\n\nSections:\n{sections}", max_tokens=1024)
-    text = ""
-    if out and out.strip() != "NONE":
-        text = _clean_prose(out)
-    if not text:
-        text = _extractive(question, top.text)
+    if out is not None and out.strip().rstrip(".").upper() == "NONE":  # the sections don't answer it
+        return refusal(question)
+    text = _clean_prose(out) if out else ""
+    if not text:  # LLM failure (None) or nothing usable left: extract from the top section
+        text = _extractive(question, _strip_prefix(top.text, top.heading_path))
         if not text:
             return refusal(question)
     return Answer(text=text, sources=[Source(top.url, snapshot_id, top.text[:200])])

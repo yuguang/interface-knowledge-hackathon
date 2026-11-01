@@ -201,3 +201,64 @@ def test_sentences_splits_after_no():
 def test_sanitize_splits_after_no():
     out = sanitize(Answer("Is there a fee? No. The fee is $5."), set(), {"$5"}).text
     assert "$5" not in out and "No." in out
+
+
+# ---- Stage 2 final fix wave
+
+def test_generic_rate_renders_apy_then_rate_in_one_line():
+    """dup-050: a generic "rate" question shows APY (scored) first and the dividend rate with it."""
+    k1, k2 = "bright_savings|apy|segment=personal;tier=0.01-1000000", "bright_savings|rate|segment=personal;tier=0.01-1000000"
+    it = Intent("fact", "bright_savings", None, {}, None, "q", "q")
+    a = render_facts("q", it, [rf("2.25%", k1), rf("2.23%", k2)], SID)
+    assert a.text == ("The Bright Savings account APY for balances of $0.01-$1,000,000 is up to 2.25% APY, "
+                      "with a dividend rate of 2.23%.")
+    k3, k4 = "auto_loan|apr|segment=personal;term=60", "auto_loan|rate|segment=personal;term=60"
+    a = render_facts("q", Intent("fact", "auto_loan", None, {}, None, "q", "q"), [rf("5.39%", k3), rf("5.20%", k4)], SID)
+    assert a.text == "The 60-month APR for an auto loan is as low as 5.39% APR, with an interest rate of 5.20%."
+
+
+def test_rate_range_and_names_render():
+    k = "credit_card|apr|name=platinum-visa;segment=personal"
+    a = render_facts("q", intent(), [rf("12.50% - 19.50%", k)], SID)
+    assert a.text == "The Platinum Visa credit card APR is 12.50% - 19.50% APR."
+    assert contains(a.text, "12.5") and contains(a.text, "Platinum Visa")
+    k = "credit_card|apr|name=rewards-visa;segment=business"
+    assert contains(render_facts("q", intent(), [rf("20.50%", k)], SID).text, "Business Rewards")
+    k = "credit_card|apr|name=introductory-balance-transfer-rate;segment=personal"
+    assert "Introductory Balance Transfer Rate credit card" in render_facts("q", intent(), [rf("2.90%", k)], SID).text
+
+
+def test_band_text_is_human():
+    k = "share_savings|apy|segment=personal;tier=25000-inf"
+    assert "for balances of $25,000 and up" in render_facts("q", intent(), [rf("0.20%", k)], SID).text
+    k = "share_savings|rate|segment=personal;tier=10000-24999.99"
+    assert "$10,000-$24,999.99" in render_facts("q", intent(), [rf("0.15%", k)], SID).text
+    k = "mortgage_fixed|rate|loan_amount=0-100000;segment=personal;term=360"
+    assert "loan amounts up to $100,000" in render_facts("q", intent(), [rf("7.13%", k)], SID).text
+
+
+def test_hours_template_polish():
+    k = "branch|hours_lobby|day=mon-fri;name=hy-vee"
+    a = render_facts("q", intent(), [rf("8:30 a.m. - 5:30 p.m.", k)], SID)
+    assert a.text == "The Hy-Vee branch lobby hours are 8:30 a.m. - 5:30 p.m. Monday-Friday."
+    k = "branch|hours_driveup|day=sat;name=madison-mineral-point-road"
+    a = render_facts("q", intent(), [rf("8 a.m. - 12 p.m.", k)], SID)
+    assert a.text == "The Madison Mineral Point Road branch drive-up hours are 8 a.m. - 12 p.m. Saturday."
+    assert ".." not in a.text
+
+
+def test_prose_none_is_refusal():
+    a = render_prose(PI.cleaned_question, PI, [HIT], SID, FakeLLM("NONE"))
+    assert not a.confident and REFUSAL_RE.search(a.text)
+    # LLM failure (None) still answers extractively
+    assert "monthly fee" in render_prose(PI.cleaned_question, PI, [HIT], SID, NoLLM()).text
+
+
+def test_extractive_strips_chunk_title_prefix():
+    text = ("Auto & Motorcycle Loans and Sales | Dupaco > Auto Loans For Every Ride > Financing, Right There\n"
+            "Galena Chrysler 937 Galena Square Dr, Galena, IL, 61036")
+    h = Hit(4, "https://www.dupaco.com/auto", "Auto Loans For Every Ride > Financing, Right There", text, 1.0, SID)
+    a = render_prose("Where can I finance a car?", PI, [h], SID, NoLLM())
+    assert "| Dupaco" not in a.text and "Galena Chrysler" in a.text
+    h = Hit(5, "https://www.dupaco.com/x", "", "Checking | Dupaco\nFree checking has no monthly fee.", 1.0, SID)
+    assert render_prose("monthly fee?", PI, [h], SID, NoLLM()).text == "Free checking has no monthly fee."
