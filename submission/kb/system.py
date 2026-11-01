@@ -138,18 +138,21 @@ class KnowledgeSystem:
         memo = self.store.memo_get(it.canonical, sid)
         if memo is not None:
             return _answer_from_dict(memo)
-        sel = []
+        sel, cands = [], []
         if it.product:
             try:
-                sel = resolve.select_for_intent(it, self.store.resolved(sid, it.product, it.attribute))
+                cands = self.store.resolved(sid, it.product, it.attribute)
+                sel = resolve.select_for_intent(it, cands)
             except Exception:
                 self._fail("select", q80)
                 degraded = True
                 sel = []
         ans = None
+        from_facts = False
         if sel:
             try:
                 ans = compose.render_facts(question, it, sel, sid)
+                from_facts = True
             except Exception:  # fall through to the retrieval path
                 self._fail("render_facts", q80)
                 degraded = True
@@ -162,7 +165,9 @@ class KnowledgeSystem:
                 degraded = True
                 ans = self._refusal(question)
         try:
-            drop = resolve.stale_values(self.store, sel)
+            # Prose answers about a known product/attribute (I8): strip values stale for any of its candidate keys.
+            basis = sel if from_facts else resolve.matching(it, cands)
+            drop = resolve.stale_values(self.store, basis)
         except Exception:
             self._fail("stale_values", q80)
             degraded = True
