@@ -1,20 +1,20 @@
-"""Dense retrieval: one Chroma collection, one document per distinct chunk, snapshot membership as metadata."""
+"""Dense retrieval: one Chroma collection, one document per distinct chunk, snapshot membership as metadata.
+
+Chroma stores and embeds; queries are exact cosine over the snapshot's stored embeddings (ruling R39), because
+Chroma 1.5.9's HNSW graph differs between builds of the same data and so its approximate neighbours do too.
+"""
 from __future__ import annotations
 
 import logging
 import shutil
 from pathlib import Path
 
+import numpy as np
+
 from ..store import Store
 
 COLLECTION = "chunks"
 BATCH = 1000
-# HNSW params pinned explicitly (Chroma's defaults, except num_threads, which defaults to cpu_count()).
-# NOTE: on chromadb 1.5.9 this does NOT make builds reproducible: num_threads is dropped from the resolved
-# config, and two single-threaded builds of the same data still return different neighbours
-# (see test_dense_index_is_reproducible, xfail).
-HNSW = {"hnsw:space": "cosine", "hnsw:num_threads": 1, "hnsw:construction_ef": 100, "hnsw:M": 16,
-        "hnsw:search_ef": 100}
 for _name in ("chromadb", "onnxruntime"):
     logging.getLogger(_name).setLevel(logging.ERROR)
 
@@ -51,12 +51,15 @@ class DenseIndex:
         shutil.rmtree(path, ignore_errors=True)  # build() keeps index_dir; a stale index must not leak in
         Path(path).mkdir(parents=True, exist_ok=True)
         self.client = chromadb.PersistentClient(path=path, settings=Settings(anonymized_telemetry=False))
+        self.embed = embedding_function()
         self.collection = self.client.create_collection(
-            COLLECTION, embedding_function=embedding_function(), metadata=HNSW)
+            COLLECTION, embedding_function=self.embed, metadata={"hnsw:space": "cosine"})
+        self._matrices: dict[str, tuple[np.ndarray, np.ndarray]] = {}  # flag -> (chunk ids, unit-row matrix)
 
     def index_snapshot(self, store: Store, snapshot_id: str) -> None:
         """Embed chunks first seen in this snapshot; flag recurring chunks with a metadata update."""
         flag = snapshot_flag(snapshot_id)
+        self._matrices.pop(flag, None)
         texts = {sc.chunk_id: sc.chunk for sc in store.new_chunks(snapshot_id)}
         all_ids = sorted(store.chunk_ids_in(snapshot_id))
         present = set()
@@ -75,11 +78,29 @@ class DenseIndex:
             part = upd[i:i + BATCH]
             self.collection.update(ids=[str(c) for c in part], metadatas=[{flag: True}] * len(part))
 
+    def _matrix(self, flag: str) -> tuple[np.ndarray, np.ndarray]:
+        """The snapshot's chunk ids (ascending) and L2-normalised float32 embeddings; loaded once, cached."""
+        if flag not in self._matrices:
+            got = self.collection.get(where={flag: True}, include=["embeddings"])
+            ids = np.array([int(i) for i in got["ids"]], dtype=np.int64)
+            order = np.argsort(ids, kind="stable")
+            if not len(ids):
+                self._matrices[flag] = (ids, np.zeros((0, 0), dtype=np.float32))
+                return self._matrices[flag]
+            m = np.asarray(got["embeddings"], dtype=np.float32).reshape(len(ids), -1)[order]
+            norms = np.linalg.norm(m, axis=1, keepdims=True)
+            self._matrices[flag] = (ids[order], m / np.where(norms > 0, norms, 1.0))
+        return self._matrices[flag]
+
     def query(self, question: str, snapshot_id: str, k: int) -> list[tuple[int, float]]:
-        """(chunk_id, cosine similarity) for the k nearest chunks present in the snapshot."""
+        """(chunk_id, cosine similarity) for the k most similar chunks in the snapshot; exact, ties by chunk_id."""
         if not question.strip():
             return []
-        res = self.collection.query(query_texts=[question], n_results=k, where={snapshot_flag(snapshot_id): True},
-                                    include=["distances"])
-        out = [(int(i), 1.0 - float(d)) for i, d in zip(res["ids"][0], res["distances"][0])]
-        return sorted(out, key=lambda x: (-x[1], x[0]))  # stable rank for equal distances
+        ids, m = self._matrix(snapshot_flag(snapshot_id))
+        if not len(ids):
+            return []
+        q = np.asarray(self.embed([question])[0], dtype=np.float32)
+        q = q / (np.linalg.norm(q) or 1.0)
+        scores = m @ q
+        top = np.lexsort((ids, -scores))[:k]  # primary -score, then chunk_id
+        return [(int(ids[i]), float(scores[i])) for i in top]

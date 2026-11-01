@@ -240,9 +240,6 @@ class RandomEmbedder(HashEmbedder):
         return out
 
 
-@pytest.mark.xfail(strict=False, reason="chromadb 1.5.9 HNSW builds differ run to run even with num_threads=1 "
-                   "(fails ~6/8 runs at 3,000 chunks); needs a controller decision: exhaustive ef_search or exact "
-                   "re-scoring")
 def test_dense_index_is_reproducible(tmp_path, monkeypatch):
     monkeypatch.setattr(dense, "embedding_function", RandomEmbedder)
     st = Store()
@@ -257,9 +254,23 @@ def test_dense_index_is_reproducible(tmp_path, monkeypatch):
     for d in ("a", "b"):
         r = Retriever(st, FakeLLM(None), tmp_path / d)
         r.index_snapshot(S5)
-        assert r.dense.collection.metadata["hnsw:num_threads"] == 1
         runs.append([[c for c, _ in r.dense.query(" ".join(words[i:i + 3]), S5, 25)] for i in range(18)])
     assert runs[0] == runs[1] and all(len(q) == 25 for q in runs[0])
+    emb = RandomEmbedder()  # exact: equals a brute-force ranking by (-cosine, chunk_id)
+    vecs = {c: emb([st.chunk(c).chunk.text])[0] for c in st.chunk_ids_in(S5)}
+    for i in (0, 9):
+        q = emb([" ".join(words[i:i + 3])])[0]
+        brute = sorted(vecs, key=lambda c: (-sum(a * b for a, b in zip(q, vecs[c])), c))[:25]
+        assert runs[0][i] == brute
+
+
+def test_dense_matrix_cache_invalidated(mini_store, tmp_path, embedder):
+    r = Retriever(mini_store, FakeLLM(None), tmp_path / "index")
+    r.index_snapshot(S1)
+    assert r.dense.query("certificate rates", S5, 10) == []  # 05 not indexed yet (cached as empty)
+    r.index_snapshot(S5)
+    got = [c for c, _ in r.dense.query("certificate rates", S5, 10)]
+    assert sorted(got) == sorted(mini_store.chunk_ids_in(S5))
 
 
 # picker
