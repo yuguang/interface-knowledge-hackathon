@@ -124,9 +124,11 @@ class Store:
         if not self.fts_available:
             raise RuntimeError("SQLite FTS5 is not available")
         rows = self._db.execute(
-            """SELECT rowid, -bm25(chunk_fts) AS score FROM chunk_fts
-               WHERE chunk_fts MATCH ? AND rowid IN (SELECT chunk_id FROM chunk_snapshot WHERE snapshot_id=?)
-               ORDER BY score DESC, rowid LIMIT ?""", (match_expr, snapshot_id, k)).fetchall()
+            # EXISTS (not "rowid IN (subquery)"): the IN form makes SQLite probe FTS per row, ~25 s on 55k chunks.
+            """SELECT f.rowid, -bm25(chunk_fts) AS score FROM chunk_fts f
+               WHERE chunk_fts MATCH ?
+                 AND EXISTS (SELECT 1 FROM chunk_snapshot cs WHERE cs.chunk_id=f.rowid AND cs.snapshot_id=?)
+               ORDER BY score DESC, f.rowid LIMIT ?""", (match_expr, snapshot_id, k)).fetchall()
         return [(r[0], r[1]) for r in rows]
 
     def live_urls(self, snapshot_id: str) -> set[str]:
