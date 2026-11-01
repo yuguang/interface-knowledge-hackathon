@@ -136,6 +136,20 @@ def _band(s: str, minimum: bool = False) -> Optional[str]:
     return keys.norm_band(s, minimum=minimum)
 
 
+_RANGE = re.compile(r"\s*(\d+(?:\.\d+)?)\s*%?\s*(?:-|–|—|to)\s*(\d+(?:\.\d+)?)\s*%\s*\d?\s*(?:APR|APY)?\s*\d?\s*", re.I)
+
+
+def _percent_range(cell: str) -> Optional[str]:
+    """A two-ended rate range as "lo% - hi%" (each end via norm_percent); anything else is not one value."""
+    m = _RANGE.fullmatch(cell)
+    if not m:
+        return None
+    lo, hi = keys.norm_percent(m.group(1) + "%"), keys.norm_percent(m.group(2) + "%")
+    if lo is None or hi is None or float(lo[:-1]) > float(hi[:-1]):
+        return None
+    return f"{lo} - {hi}"
+
+
 def _row_obs(ctx: PageContext, ctx_text: str, header: list[str], line: str, chunk_id: Optional[int]):
     roles = [_header_role(h) for h in header]
     cells = _cells(line)
@@ -217,13 +231,15 @@ def _row_obs(ctx: PageContext, ctx_text: str, header: list[str], line: str, chun
         quals["kind"] = "refinance"
     if prod == "ira":
         quals["name"] = "roth" if "roth" in low else "traditional" if "traditional" in low else "ira"
-    elif prod in ("checking", "credit_card"):
-        heading = ctx_text.split(" ; ")[0]
-        if prod != "credit_card" or not re.search(r"(?i)visa|card", heading):
-            heading = ""
+    elif prod == "credit_card":
+        # Checking gets no name: landing pages print the 1st Rate Checking table without a label, so a name from
+        # /rates would split one account across two keys. Credit cards need it (platinum-visa vs rewards-visa).
+        # nearest heading/caption line naming a card ("Rewards Visa" above a "Standard | 15.50% – 21.00%" table)
+        heading = next((t for t in reversed(ctx_text.split(" ; ")) if re.search(r"(?i)visa|card", t)), "")
         first_hdr = next((h for h, r in zip(header, roles) if r == "label"), "")
         nm = next((_slug(c) for c in (label, first_hdr, heading) if c and not _GENERIC.match(c.strip())
                    and _slug(c)), "")
+        nm = re.sub(r"^(.*?\bvisa)\b.*$", r"\1", nm)  # "Platinum Visa Rate" names the Platinum Visa
         if nm:
             quals["name"] = nm
     elif prod == "money_market" and "achieve" in low:
@@ -232,8 +248,9 @@ def _row_obs(ctx: PageContext, ctx_text: str, header: list[str], line: str, chun
     out = []
     for attr, cell in values:
         if re.search(r"\d\s*%?\s*(-|–|—|to)\s*\d+(\.\d+)?\s*%", cell):
-            continue  # a range of rates is not one value
-        norm = keys.norm_percent(cell)
+            norm = _percent_range(cell)  # "12.50% – 19.50%2" -> "12.50% - 19.50%"
+        else:
+            norm = keys.norm_percent(cell)
         if norm is None:
             continue
         try:

@@ -85,7 +85,7 @@ def test_amortisation_table_ignored():
 def test_unknown_product_and_range_rows_skipped_without_raising():
     md = ("| Thing | Rate |\n| --- | --- |\n| Mystery | 1.00% |\n")
     assert extract(ctx(md, url="https://www.dupaco.com/about")) == []
-    md = "| Card Type | APR |\n| --- | --- |\n| Platinum Visa Rate | 12.50% – 19.50%2 |\n| Intro | 2.90%1 |"
+    md = "| Card Type | APR |\n| --- | --- |\n| Mystery Card | 1.00% – 2.00% – 3.00% |\n| Intro | 2.90%1 |"
     f = by_key(extract(ctx(md)))
     assert [o.value_norm for o in f.values()] == ["2.90%"]
 
@@ -149,7 +149,43 @@ def test_credit_card_name_from_header_when_row_label_generic():
 
 
 def test_name_qualifiers_are_slugs():
-    md = ("| Account Type | Balance Tier | APY |\n| --- | --- | --- |\n| 1st Rate Checking | $0.01 - $4,999.99 | 0.00% |\n"
-          "| Free Checking | — | 0.00% |")
+    md = ("| Card Type | APR |\n| --- | --- |\n| Introductory Balance Transfer Rate | 2.90%1 |\n"
+          "| Rewards Visa | 15.50% |")
     obs = extract(ctx(md))
-    assert {o.qualifiers["name"] for o in obs} == {"1st-rate-checking", "free-checking"}
+    assert {o.qualifiers["name"] for o in obs} == {"introductory-balance-transfer-rate", "rewards-visa"}
+
+
+# ---- Stage 2 final fix wave
+
+RATES_CARDS = ("Credit Cards\n\nPlatinum Visa\n\n| Card Type | APR |\n| --- | --- |\n"
+               "| Introductory Balance Transfer Rate | 2.90%1 |\n| Platinum Visa Rate | 12.50% – 19.50%2 |\n\n"
+               "Rewards Visa\n\n| Card Type | APR |\n| --- | --- |\n| Standard | 15.50% – 21.00%1 |")
+
+
+def test_apr_range_emitted_with_card_name():
+    """Real 05 /rates layout: "Platinum Visa Rate | 12.50% – 19.50%2" is a fact (dup-034/035/040)."""
+    f = by_key(extract(ctx(RATES_CARDS, url="https://www.dupaco.com/rates")))
+    o = f["credit_card|apr|name=platinum-visa;segment=personal"]
+    assert o.value_norm == "12.50% - 19.50%" and o.value_raw == "12.50% – 19.50%2"
+    assert f["credit_card|apr|name=rewards-visa;segment=personal"].value_norm == "15.50% - 21.00%"
+    assert f["credit_card|apr|name=introductory-balance-transfer-rate;segment=personal"].value_norm == "2.90%"
+    md = "| Card Type | APR |\n| --- | --- |\n| Business Platinum Visa | 9.9 to 18% |"
+    assert by_key(extract(ctx(md, url="https://www.dupaco.com/business/credit-cards")))[
+        "credit_card|apr|name=platinum-visa;segment=business"].value_norm == "9.90% - 18.00%"
+
+
+CHECKING_RATES = ("| Account Type | Balance Tier | Dividend Rate | Annual Percentage Yield (APY)1 | Min. to Open | Min. to Earn |\n"
+                  "| --- | --- | --- | --- | --- | --- |\n| Free Checking | — | 0.00% | 0.00%1 | $0.00 | — |\n"
+                  "| 1st Rate Checking | $5,000 – $24,999.99 | 2.47% | 2.50% | — | $5,000.00 |")
+CHECKING_LP = ("| Balance | Dividend Rate | Annual Percentage Yield (APY)2 | Min. to Open | Min. to Earn |\n"
+               "| --- | --- | --- | --- | --- |\n| $5,000 - $24,999.99 | 2.96% | 3.00% | None | $5,000 |")
+
+
+def test_checking_keys_same_on_rates_and_landing_pages():
+    """Real 05: /rates (1st Rate Checking row) and /checking-offer-lp (no label) must share one key per tier."""
+    rates = by_key(extract(ctx(CHECKING_RATES, url="https://www.dupaco.com/rates")))
+    lp = by_key(extract(ctx(CHECKING_LP, url="https://www.dupaco.com/checking-offer-lp")))
+    k = "checking|apy|segment=personal;tier=5000-24999.99"
+    assert rates[k].value_norm == "2.50%" and lp[k].value_norm == "3.00%"
+    assert rates["checking|apy|segment=personal"].value_norm == "0.00%"  # Free Checking: no tier, still distinct
+    assert not any("name" in o.qualifiers for o in list(rates.values()) + list(lp.values()))
