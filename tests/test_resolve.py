@@ -173,3 +173,115 @@ def test_mortgage_headline_prefers_purchase():
     assert [r.fact_key for r in select_for_intent(intent("mortgage_fixed", "apr"), res)] == [b]
     sel = select_for_intent(intent("mortgage_fixed", "apr", {"kind": "refinance"}), res)
     assert [r.fact_key for r in sel] == [r_]
+
+
+# ---- Stage 2 final fix wave
+
+def test_overlapping_model_year_bands_keep_highest_authority():
+    """Real 05: 2023-2026 on /switch-and-earn (other) vs 2024-2027 on /rates both contain 2025 (dup-016/017)."""
+    a = "auto_loan|apr|model_year=2023-2026;segment=personal;term=60"
+    b = "auto_loan|apr|model_year=2024-2027;segment=personal;term=60"
+    c = "auto_loan|apr|model_year=2021-2023;segment=personal;term=60"
+    st = build([obs(a, "5.34%", url="https://x/switch-and-earn", ptype="other"), obs(b, "5.39%"), obs(c, "5.64%")])
+    res = resolve_snapshot(st, "s5")
+    for year in ("2025", "2024"):
+        sel = select_for_intent(intent("auto_loan", "apr", {"segment": "personal", "term": "60", "model_year": year}), res)
+        assert [r.value for r in sel] == ["5.39%"]
+    # 2023: 2021-2023 and 2023-2026 both contain it (same width): the rate sheet wins
+    sel = select_for_intent(intent("auto_loan", "apr", {"term": "60", "model_year": "2023"}), res)
+    assert [r.value for r in sel] == ["5.64%"]
+
+
+def test_rate_sheet_beats_narrower_band_on_other_page():
+    """Real 05: 2021-22 5.59% on /switch-and-earn vs 2021-23 5.64% on /rates; a 2022 vehicle gets the rate sheet."""
+    a = "auto_loan|apr|model_year=2021-2022;segment=personal;term=60"
+    b = "auto_loan|apr|model_year=2021-2023;segment=personal;term=60"
+    st = build([obs(a, "5.59%", url="https://x/switch-and-earn", ptype="other"), obs(b, "5.64%")])
+    sel = select_for_intent(intent("auto_loan", "apr", {"term": "60", "model_year": "2022"}), resolve_snapshot(st, "s5"))
+    assert [r.value for r in sel] == ["5.64%"]
+
+
+def test_same_band_with_and_without_segment_collapse():
+    """An LLM fact without `segment` and the table fact with it are one account; newer page date wins on equal authority."""
+    k1 = "checking|apy|segment=personal;tier=5000-24999.99"
+    k2 = "checking|apy|tier=5000-24999.99"
+    k3 = "checking|apy|tier=0-4999.99"
+    k4 = "checking|apy|segment=personal;tier=0.01-4999.99"
+    st = build([obs(k1, "2.50%", page_date="2026-01-01"), obs(k2, "3.00%", url="https://x/b", page_date="2026-06-01"),
+                obs(k3, "0.00%", url="https://x/b"), obs(k4, "0.00%")])
+    sel = select_for_intent(intent("checking", "apy", family="list"), resolve_snapshot(st, "s5"))
+    assert sorted(r.fact_key for r in sel) == sorted([k2, k4])  # 0.01-4999.99 is the narrower band
+    sel = select_for_intent(intent("checking", "apy", {"tier": "6000"}), resolve_snapshot(st, "s5"))
+    assert [r.value for r in sel] == ["3.00%"]
+
+
+def test_named_account_not_merged_with_plain_one():
+    """Achieve Money Market and the plain money market share the 25000-99999.99 band but are different accounts."""
+    ach = "money_market|apy|name=achieve;segment=personal;tier=25000-99999.99"
+    mm = "money_market|apy|segment=personal;tier=25000-99999.99"
+    st = build([obs(ach, "3.66%", url="https://x/earn-more", ptype="other"), obs(mm, "0.35%")])
+    res = resolve_snapshot(st, "s5")
+    assert sorted(r.value for r in select_for_intent(intent("money_market", "apy", {"tier": "50000"}), res)) == ["0.35%", "3.66%"]
+
+
+def test_distinct_kinds_and_tiers_not_grouped():
+    reg = "certificate_special|apy|segment=personal;term=17;tier=1000-inf"
+    jumbo = "certificate_special|apy|kind=jumbo;segment=personal;term=17;tier=100000-inf"
+    st = build([obs(reg, "4.10%"), obs(jumbo, "4.20%")])
+    sel = select_for_intent(intent("certificate_special", "apy", {"term": "17"}), resolve_snapshot(st, "s5"))
+    assert sorted(r.value for r in sel) == ["4.10%", "4.20%"]
+    tiers = [f"share_savings|apy|tier={b}" for b in ("0-99.99", "100-2499.99", "2500-9999.99")]
+    st = build([obs(k, f"0.{i}0%") for i, k in enumerate(tiers)] + [obs("share_savings|apy|", "0.05%", url="https://x/p")])
+    assert len(select_for_intent(intent("share_savings", "apy", family="list"), resolve_snapshot(st, "s5"))) == 4
+
+
+def test_band_order_numeric_before_cap():
+    ks = [f"share_savings|apy|tier={b}" for b in ("100000-inf", "25000-99999.99", "5000-24999.99", "0-4999.99", "1000000-inf")]
+    st = build([obs(k, f"0.{i}0%") for i, k in enumerate(ks)])
+    sel = select_for_intent(intent("share_savings", "apy"), resolve_snapshot(st, "s5"))
+    assert [r.fact_key.split("tier=")[1] for r in sel] == ["0-4999.99", "5000-24999.99", "25000-99999.99", "100000-inf"]
+    terms = [f"certificate|apy|term={t}" for t in (12, 6, 24, 3, 60)]
+    st = build([obs(k, "1.00%") for k in terms])
+    sel = select_for_intent(intent("certificate", "apy"), resolve_snapshot(st, "s5"))
+    assert [r.fact_key.split("term=")[1] for r in sel] == ["3", "6", "12", "24"]
+
+
+def test_generic_rate_selects_rate_and_apy_or_apr():
+    """attribute None + product = a generic "rate" question (dup-050, dup-040): deposits rate+apy, loans rate+apr."""
+    st = build([obs("bright_savings|apy|tier=0.01-1000000", "2.25%"), obs("bright_savings|rate|tier=0.01-1000000", "2.23%"),
+                obs("bright_savings|min_balance|", "$0"),
+                obs("credit_card|apr|name=platinum-visa", "12.50% - 19.50%"), obs("credit_card|rate|name=x", "3.00%"),
+                obs("credit_card|apy|name=y", "1.00%")])
+    res = resolve_snapshot(st, "s5")
+    sel = select_for_intent(intent("bright_savings", None), res)
+    assert [(r.fact_key.split("|")[1], r.value) for r in sel] == [("apy", "2.25%"), ("rate", "2.23%")]
+    sel = select_for_intent(intent("credit_card", None, family="list"), res)
+    assert sorted(r.value for r in sel) == ["12.50% - 19.50%", "3.00%"]
+    # explicit attribute stays exact
+    assert [r.value for r in select_for_intent(intent("bright_savings", "rate"), res)] == ["2.23%"]
+
+
+def test_generic_rate_cap_counts_accounts_not_attributes():
+    st = build([obs(f"certificate|{a}|term={t}", f"{t}.0{i}%") for t in (3, 6, 9, 12, 18) for i, a in enumerate(("apy", "rate"))])
+    sel = select_for_intent(intent("certificate", None), resolve_snapshot(st, "s5"))
+    assert len(sel) == 8 and [r.fact_key.split("|")[1] for r in sel[:2]] == ["apy", "rate"]
+
+
+def test_superlative_on_range_uses_low_end():
+    st = build([obs("credit_card|apr|name=platinum-visa", "12.50% - 19.50%"), obs("credit_card|apr|name=rewards-visa", "15.50% - 21.00%")])
+    sel = select_for_intent(intent("credit_card", "apr", sup="lowest"), resolve_snapshot(st, "s5"))
+    assert [r.value for r in sel] == ["12.50% - 19.50%"]
+
+
+def test_branch_name_token_subset():
+    k1 = "branch|hours_lobby|day=mon-fri;name=madison-mineral-point-road"
+    k2 = "branch|hours_lobby|day=mon-fri;name=dubuque-mullan-ave"
+    st = build([obs(k1, "9 a.m. - 5 p.m."), obs(k2, "8 a.m. - 5 p.m.")])
+    res = resolve_snapshot(st, "s5")
+    f = lambda n: [r.fact_key for r in select_for_intent(intent("branch", "hours_lobby", {"name": n}), res)]
+    assert f("mineral-point-road") == [k1]
+    assert f("mullan-avenue") == [k2]
+    assert f("madison") == [k1]
+    assert f("key-west") == []
+    # other qualifiers stay exact
+    assert [r.fact_key for r in select_for_intent(intent("branch", "hours_lobby", {"name": "madison", "day": "sat"}), res)] == []

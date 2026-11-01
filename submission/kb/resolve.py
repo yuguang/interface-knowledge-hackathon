@@ -103,12 +103,25 @@ def _num(v: str) -> Optional[float]:
     return float(m.group(0).replace(",", "")) if m else None
 
 
+_STREET = {"avenue": "ave", "street": "st", "road": "rd", "boulevard": "blvd", "drive": "dr", "highway": "hwy",
+           "lane": "ln", "parkway": "pkwy", "court": "ct", "place": "pl", "circle": "cir"}
+
+
+def _name_tokens(slug: str) -> set[str]:
+    return {_STREET.get(t, t) for t in str(slug).split("-") if t}
+
+
 def _qual_match(name: str, want: str, have: str) -> bool:
     if name in _BAND_QUALIFIERS:
         try:
             return band_contains(have, float(str(want).replace(",", "").lstrip("$")))
         except ValueError:
             return have == want
+    if name == "name":
+        # Tracks slug names differently ("madison-mineral-point-road" vs "mineral-point-road"): the asked name's
+        # tokens must all occur in the fact's name (street words canonicalised: "avenue" == "ave").
+        w = _name_tokens(want)
+        return bool(w) and w <= _name_tokens(have)
     return have == want
 
 
@@ -142,6 +155,112 @@ def _narrowest(sel: list, name: str) -> list:
     return [s for s in sel if name not in s[3] or _width(s[3][name]) == best[_group(s[3], name)]]
 
 
+_DEPOSITS = frozenset({"certificate", "certificate_special", "share_savings", "money_market", "checking",
+                       "bright_savings", "jump_start", "ira"})
+# Extra non-band qualifier one key may carry over another and still be the same account (LLM facts without
+# `segment`). `name` is not one: Achieve Money Market and the plain money market share tier bands but are different
+# accounts; checking's name split (1st Rate on /rates, unnamed on landing pages) is removed at the source (C1).
+_SUBSET_EXTRA = frozenset({"segment"})
+
+
+def rate_attributes(product: Optional[str]) -> tuple[str, ...]:
+    """Attributes a generic "rate" question covers: deposits are quoted as APY, loans and cards as APR."""
+    return ("apy", "rate") if product in _DEPOSITS else ("apr", "rate")
+
+
+def attribute_matches(intent: Intent, attribute: str) -> bool:
+    """An intent with a product but no attribute is a generic "rate" question (intent.parse): rate plus APY/APR."""
+    if intent.attribute:
+        return attribute == intent.attribute
+    return not intent.product or attribute in rate_attributes(intent.product)
+
+
+def matching(intent: Intent, resolved: list[ResolvedFact]) -> list[ResolvedFact]:
+    """Resolved facts of the intent's product and attribute(s), qualifiers ignored."""
+    out = []
+    for r in resolved:
+        p, a, _ = parse_key(r.fact_key)
+        if (not intent.product or p == intent.product) and attribute_matches(intent, a):
+            out.append(r)
+    return out
+
+
+def _bounds(band: str) -> tuple[float, float]:
+    lo, hi = band.split("-", 1)
+    return float(lo), (float("inf") if hi == "inf" else float(hi))
+
+
+def _band_compatible(a: str, b: str, asked: Optional[str]) -> bool:
+    """Bands that can describe the same rate. Asked amount/year: both contain it (checked by the caller).
+    Nothing asked: (nearly) the same band ("0-4999.99" vs "0.01-4999.99"), or a partial overlap where neither
+    band contains the other ("2023-2026" vs "2024-2027"). Nested bands are a tier structure ("$100,000 or less"
+    inside "$200,000 or less", "$1,000+" around "$100,000+") and stay distinct."""
+    if a == b or asked is not None:
+        return True
+    try:
+        (la, ha), (lb, hb) = _bounds(a), _bounds(b)
+    except ValueError:
+        return False
+    if ha == hb and abs(la - lb) < 1:
+        return True
+    overlap = max(la, lb) <= min(ha, hb)
+    nested = (la <= lb and hb <= ha) or (lb <= la and ha <= hb)
+    return overlap and not nested
+
+
+def _same_account(fa: dict, fb: dict, q: dict) -> bool:
+    """Two keys of one product+attribute that describe the same account/rate (so only one may answer)."""
+    ba = {k: v for k, v in fa.items() if k in _BAND_QUALIFIERS}
+    bb = {k: v for k, v in fb.items() if k in _BAND_QUALIFIERS}
+    if set(ba) != set(bb) or not all(_band_compatible(ba[k], bb[k], q.get(k)) for k in ba):
+        return False
+    na = {k: v for k, v in fa.items() if k not in _BAND_QUALIFIERS}
+    nb = {k: v for k, v in fb.items() if k not in _BAND_QUALIFIERS}
+    if na == nb:
+        return True
+    small, big = (na, nb) if len(na) <= len(nb) else (nb, na)
+    return all(big.get(k) == v for k, v in small.items()) and set(big) - set(small) <= _SUBSET_EXTRA
+
+
+def _band_width(fq: dict) -> float:
+    return sum(_width(fq[k]) for k in _BAND_QUALIFIERS if k in fq)
+
+
+def _collapse_same_account(sel: list, q: dict) -> list:
+    """Keep one candidate per account split across keys (overlapping bands, or one key's qualifiers a subset of
+    the other's): best first by winner authority, then newest page date, then narrowest band, then smallest key;
+    a candidate is dropped when it is the same account as one already kept (greedy, so overlaps don't chain)."""
+    ranked = sorted(sel, key=lambda s: s[0].fact_key)
+    ranked = sorted(ranked, key=lambda s: (s[0].winner.authority, s[0].winner.page_date or "", -_band_width(s[3])),
+                    reverse=True)
+    kept: list = []
+    for s in ranked:
+        if not any(k[1:3] == s[1:3] and _same_account(k[3], s[3], q) for k in kept):
+            kept.append(s)
+    return kept
+
+
+def _num_or_text(v: str) -> tuple:
+    try:
+        return (0, float(v), "")
+    except ValueError:
+        return (1, 0.0, v)
+
+
+def _order(s: tuple) -> tuple:
+    """Numeric qualifier order (bands by low then high bound, terms by months); APY/APR before rate."""
+    _, p, a, fq = s
+    quals = []
+    for k in sorted(fq):
+        v = fq[k]
+        if k in _BAND_QUALIFIERS and "-" in v:
+            lo, hi = v.split("-", 1)
+            quals.append((k, _num_or_text(lo), _num_or_text(hi)))
+        else:
+            quals.append((k, _num_or_text(v), (0, 0.0, "")))
+    return p, tuple(quals), 0 if a in ("apy", "apr") else 1, a
+
+
 def select_for_intent(intent: Intent, resolved: list[ResolvedFact]) -> list[ResolvedFact]:
     q = intent.qualifiers or {}
     parsed = [(r, parse_key(r.fact_key)) for r in resolved]
@@ -149,10 +268,11 @@ def select_for_intent(intent: Intent, resolved: list[ResolvedFact]) -> list[Reso
     for r, (p, a, fq) in parsed:
         if intent.product and p != intent.product:
             continue
-        if intent.attribute and a != intent.attribute:
+        if not attribute_matches(intent, a):
             continue
         if all(k in fq and _qual_match(k, v, fq[k]) for k, v in q.items()):
             sel.append((r, p, a, fq))
+    sel = _collapse_same_account(sel, q)
     for name in _BAND_QUALIFIERS:
         if name in q:
             sel = _narrowest(sel, name)
@@ -175,15 +295,20 @@ def select_for_intent(intent: Intent, resolved: list[ResolvedFact]) -> list[Reso
                 newest[g] = max(newest.get(g, float("-inf")), _hi(fq["model_year"]))
         sel = [s for s in sel if "model_year" not in s[3] or _hi(s[3]["model_year"]) == newest[
             tuple(sorted((k, v) for k, v in s[3].items() if k != "model_year"))]]
-    out = sorted((s[0] for s in sel), key=lambda r: r.fact_key)
+    sel = sorted(sel, key=_order)
     if intent.superlative in ("highest", "lowest"):
-        nums = [(n, r) for r in out if (n := _num(r.value)) is not None]
+        nums = [(n, s) for s in sel if (n := _num(s[0].value)) is not None]
         if nums:
             target = (max if intent.superlative == "highest" else min)(n for n, _ in nums)
-            out = [r for n, r in nums if n == target]
-    if intent.family != "list":
-        out = out[:4]
-    return out
+            sel = [s for n, s in nums if n == target]
+    if intent.family != "list":  # at most 4 accounts; a generic "rate" keeps each account's APY/APR and rate
+        accounts: list[tuple] = []
+        for s in sel:
+            acct = (s[1], _group(s[3], ""))
+            if acct not in accounts:
+                accounts.append(acct)
+        sel = [s for s in sel if (s[1], _group(s[3], "")) in accounts[:4]]
+    return [s[0] for s in sel]
 
 
 def stale_values(store: Store, selected: list[ResolvedFact]) -> set[str]:
