@@ -39,6 +39,17 @@ def _header_role(h: str) -> str:
     return "label"
 
 
+_GENERIC = re.compile(r"(?i)^(variable |standard |fixed |introductory |current )?(interest )?(rate|apr|apy)?"
+                      r"\s*\d*$|^(purchase|standard|card type|account type|rates?|apr)\W*\d*$")
+
+
+def _slug(text: str) -> str:
+    """Lowercase hyphen slug for `name` qualifiers; segment words and footnote digits are dropped."""
+    t = re.sub(r"\s*\d+$", "", text.strip().lower())
+    t = re.sub(r"\b(business|personal)\b", " ", t)
+    return re.sub(r"[^a-z0-9]+", "-", t).strip("-")
+
+
 def _cells(line: str) -> list[str]:
     s = line.strip()
     if s.startswith("|"):
@@ -206,9 +217,15 @@ def _row_obs(ctx: PageContext, ctx_text: str, header: list[str], line: str, chun
         quals["kind"] = "refinance"
     if prod == "ira":
         quals["name"] = "roth" if "roth" in low else "traditional" if "traditional" in low else "ira"
-    elif prod in ("checking", "credit_card") and label.strip():
-        nm = re.sub(r"[;=|]", " ", re.sub(r"\s*\d+$", "", label.strip())).lower()
-        quals["name"] = re.sub(r"\bbusiness\b", "", nm).strip()
+    elif prod in ("checking", "credit_card"):
+        heading = ctx_text.split(" ; ")[0]
+        if prod != "credit_card" or not re.search(r"(?i)visa|card", heading):
+            heading = ""
+        first_hdr = next((h for h, r in zip(header, roles) if r == "label"), "")
+        nm = next((_slug(c) for c in (label, first_hdr, heading) if c and not _GENERIC.match(c.strip())
+                   and _slug(c)), "")
+        if nm:
+            quals["name"] = nm
     elif prod == "money_market" and "achieve" in low:
         quals["name"] = "achieve"
 

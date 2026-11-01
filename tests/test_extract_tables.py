@@ -132,3 +132,24 @@ def test_term_column_holding_program_description():
 def test_unmapped_named_account_skipped():
     md = "| Account Type | Balance Tier | APY |\n| --- | --- | --- |\n| Launchpad Savings | $5 - $1,000 | 3.25% |"
     assert extract(ctx(md, url="https://www.dupaco.com/personal/retirement")) == []
+
+
+def test_credit_card_name_from_header_when_row_label_generic():
+    # snapshot-01 layout: card name is the first-column header, row label is generic
+    md = ("## Business Credit Card Rates\n\n| Business Platinum Visa | Annual Percentage Rate (APR)\\* |\n| --- | --- |\n"
+          "| Variable Interest Rate | 15.50%1 |\n\n| Business Rewards Visa | Annual Percentage Rate (APR)\\* |\n"
+          "| --- | --- |\n| Variable Interest Rate | 20.5%1 |")
+    f = by_key(extract(ctx(md, url="https://www.dupaco.com/business/credit-cards")))
+    assert f["credit_card|apr|name=platinum-visa;segment=business"].value_norm == "15.50%"
+    assert f["credit_card|apr|name=rewards-visa;segment=business"].value_norm == "20.50%"
+    # snapshot-05 layout: name in the row label
+    md5 = "| Card Type | APR |\n| --- | --- |\n| Business Platinum Visa | 15.50%1 |"
+    assert "credit_card|apr|name=platinum-visa;segment=business" in by_key(
+        extract(ctx(md5, url="https://www.dupaco.com/business/credit-cards")))
+
+
+def test_name_qualifiers_are_slugs():
+    md = ("| Account Type | Balance Tier | APY |\n| --- | --- | --- |\n| 1st Rate Checking | $0.01 - $4,999.99 | 0.00% |\n"
+          "| Free Checking | — | 0.00% |")
+    obs = extract(ctx(md))
+    assert {o.qualifiers["name"] for o in obs} == {"1st-rate-checking", "free-checking"}
