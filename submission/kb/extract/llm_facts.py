@@ -53,8 +53,13 @@ SYSTEM = (
     "Return only facts explicitly stated in the passage, with `value` copied verbatim from the passage. "
     "Use only the allowed product, attribute and qualifier names. Examples of useful facts: eligibility "
     "rules, awards, mobile wallet support (Apple Pay, Google Pay, Samsung Pay), program names, student "
-    "loan terms, Home$tart details. If the passage states no such fact, return {\"facts\": []}."
+    "loan terms, Home$tart details. If the passage states no such fact, return {\"facts\": []}. "
+    "Qualifier formats: name = lowercase hyphen slug (\"platinum-visa\", \"hy-vee\"); term = number of months "
+    "(\"60\"); tier and loan_amount = dollar band \"low-high\" or \"low-inf\" (\"10000-24999.99\", \"25000-inf\"); "
+    "model_year = year band (\"2023-2026\"); segment = \"personal\" or \"business\" (personal when not stated)."
 )
+
+_NO_SEGMENT = frozenset({"branch", "org", "program"})
 
 
 def in_scope(page_type: str, text: str) -> bool:
@@ -114,11 +119,43 @@ def _quote(text: str, value: str) -> Optional[str]:
     return sent
 
 
+def _slug(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
+
+
+def _norm_quals(product: str, quals: dict) -> Optional[dict[str, str]]:
+    """Qualifiers in the same formats as the table/regex extractors (so keys match); None when one can't be read."""
+    out: dict[str, str] = {}
+    for k, v in quals.items():
+        k, v = str(k), str(v).strip()
+        if not v:
+            continue
+        if k == "name":
+            v = _slug(v)
+        elif k == "segment":
+            v = v.lower()
+        elif k == "term":
+            m = v if v.isdigit() else keys.norm_term_months(v)
+            v = str(int(m)) if m is not None else ""
+        elif k in ("tier", "loan_amount"):
+            v = keys.norm_band(v, minimum=True) or ""
+        elif k == "model_year":
+            v = keys.norm_model_year(v) or ""
+        if not v:
+            return None
+        out[k] = v
+    if product not in _NO_SEGMENT and "segment" not in out:
+        out["segment"] = "personal"
+    return out
+
+
 def _to_obs(ctx: PageContext, sc: StoredChunk, raw: dict) -> Optional[FactObs]:
     try:
         product, attribute = raw["product"], raw["attribute"]
-        quals = {str(k): str(v) for k, v in (raw.get("qualifiers") or {}).items() if str(v).strip()}
+        quals = _norm_quals(product, raw.get("qualifiers") or {})
         value = str(raw["value"]).strip()
+        if quals is None:
+            return None
         key = keys.make_key(product, attribute, quals)
     except (KeyError, ValueError, TypeError, AttributeError):
         return None
@@ -142,9 +179,12 @@ def ask(llm: LLM, text: str, title: str = "", heading: str = "") -> Optional[lis
     good = []
     for f in out["facts"]:
         try:
-            keys.make_key(f["product"], f["attribute"], f.get("qualifiers") or {})
+            quals = _norm_quals(f["product"], f.get("qualifiers") or {})
+            if quals is None:
+                continue
+            keys.make_key(f["product"], f["attribute"], quals)
             good.append({"product": f["product"], "attribute": f["attribute"],
-                         "qualifiers": dict(f.get("qualifiers") or {}), "value": str(f["value"])})
+                         "qualifiers": quals, "value": str(f["value"])})
         except (KeyError, ValueError, TypeError, AttributeError):
             continue
     return good
