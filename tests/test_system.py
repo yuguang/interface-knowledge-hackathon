@@ -1,5 +1,6 @@
 import pytest
 from contract import Answer
+from scoring import contains
 
 from conftest import mini_snapshots as _mini
 from kb import intent
@@ -183,7 +184,7 @@ def test_stale_values_failure_is_empty_set(monkeypatch):
         return ans
     monkeypatch.setattr(compose, "sanitize", spy)
     a = ks.answer(Q)
-    assert seen["drop"] == set() and a.text == "5.39%" and ks.stage_errors["stale_values"] == 1
+    assert seen["drop"] == set() and contains(a.text, "5.39%") and ks.stage_errors["stale_values"] == 1
 
 
 def test_degraded_answer_not_memoised(monkeypatch):
@@ -200,3 +201,46 @@ def test_conflicts_failure_is_empty_and_not_cached(monkeypatch):
     assert ks.conflicts() == [] and ks.stage_errors["conflicts"] == 1
     monkeypatch.setattr(conflicts_mod, "build_conflicts", lambda store, reg: ["c"])
     assert ks.conflicts() == ["c"]
+
+
+# ---- Stage 2 final fix wave
+
+def test_prose_path_drops_stale_values_of_intent_candidates(monkeypatch):
+    """F8: the intent names a product but no fact matches its qualifiers, so the prose path answers; values that
+    are stale for that product/attribute are still stripped (drop is not empty)."""
+    from contract import Answer as A
+    from kb import compose, resolve
+    from kb.model import FactObs, Intent, ResolvedFact
+    ks = _ks()
+    obs = FactObs("auto_loan|apr|term=60", "auto_loan", "apr", {"term": "60"}, "5.39%", "5.39%",
+                  "05_x", "2026-09-28", "https://example.com/rates", "rate_sheet", 100, None, "60 mo 5.39%", "table")
+    other = FactObs("auto_loan|min_balance|", "auto_loan", "min_balance", {}, "$5", "$5",
+                    "05_x", "2026-09-28", "https://example.com/rates", "rate_sheet", 100, None, "$5", "table")
+    rf, rf_other = ResolvedFact(obs.fact_key, "5.39%", obs, [], "single source"), \
+        ResolvedFact(other.fact_key, "$5", other, [], "single source")
+    monkeypatch.setattr(intent, "parse", lambda q, llm=None: Intent("fact", "auto_loan", None, {"term": "999"}, None,
+                                                                   q, "auto_loan|rate|term=999|fact||generic"))
+    monkeypatch.setattr(ks.store, "resolved", lambda sid, product=None, attribute=None: [rf, rf_other])
+    seen = {}
+
+    def stale(store, selected):
+        seen["keys"] = [r.fact_key for r in selected]
+        return {"4.99%"}
+    monkeypatch.setattr(resolve, "stale_values", stale)
+    monkeypatch.setattr(compose, "render_prose", lambda *a, **k: A(text="Auto loans were 4.99% APR. Apply online today."))
+    a = ks.answer(Q)
+    assert seen["keys"] == ["auto_loan|apr|term=60"]  # generic rate: rate/APR candidates only, qualifiers ignored
+    assert "4.99" not in a.text and "Apply online" in a.text
+
+
+def test_fact_path_drop_still_uses_selected(monkeypatch):
+    from kb import resolve
+    ks = _fact_ks(monkeypatch)
+    seen = {}
+
+    def stale(store, selected):
+        seen["keys"] = [r.fact_key for r in selected]
+        return set()
+    monkeypatch.setattr(resolve, "stale_values", stale)
+    ks.answer(Q)
+    assert seen["keys"] == ["auto_loan|apr|term=60"]
