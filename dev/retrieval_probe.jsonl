@@ -20,13 +20,13 @@
 {"question": "Where can Hy-Vee branch members get full-service banking?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["Key West and Sycamore Street"]}
 {"question": "What is the HELOC rate?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["6.25%"]}
 {"question": "What APY does Launchpad Savings pay?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["3.25%"]}
-{"question": "How much assistance does the Home$tart program provide?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["$15,000"]}
-{"question": "How do I join Dupaco online?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["join.dupaco.com"]}
+{"question": "How much assistance does the Home$tart program provide?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["Home$tart", "$15,000"]}
+{"question": "How do I join Dupaco online?", "snapshot_id": "05_2026-09-28_latest", "must_include": ["join.dupaco.com", "charter area"]}
 {"question": "What APY did the 10-month jumbo certificate special pay?", "snapshot_id": "01_2026-05-12_baseline", "must_include": ["3.90%"]}
 {"question": "What was the 60-month auto loan APR for a 2023-26 model year?", "snapshot_id": "01_2026-05-12_baseline", "must_include": ["5.19% APR"]}
 {"question": "What was the 30-year fixed purchase mortgage rate for $100,000 or less?", "snapshot_id": "01_2026-05-12_baseline", "must_include": ["5.875%", "6.010%"]}
-{"question": "What APY did 1st Rate Checking pay?", "snapshot_id": "01_2026-05-12_baseline", "must_include": ["3.00%"]}
-{"question": "What APY did the 12-month certificate pay?", "snapshot_id": "01_2026-05-12_baseline", "must_include": ["2.90%"]}
+{"question": "What APY did 1st Rate Checking pay?", "snapshot_id": "01_2026-05-12_baseline", "must_include": ["1st Rate Checking", "2.96%", "3.00%"]}
+{"question": "What APY did the 12-month certificate pay?", "snapshot_id": "01_2026-05-12_baseline", "must_include": ["2.88%", "2.90%"]}
 {"question": "What APY did the 25-month certificate special pay?", "snapshot_id": "01_2026-05-12_baseline", "must_include": ["3.60%"]}
 {"question": "What was the 30-year fixed mortgage rate for $100,000 or less?", "snapshot_id": "02_2026-05-19_recrawl", "must_include": ["6.250%", "6.388%"]}
 {"question": "What was the 15-year fixed purchase mortgage rate?", "snapshot_id": "02_2026-05-19_recrawl", "must_include": ["6.000%", "6.125%"]}

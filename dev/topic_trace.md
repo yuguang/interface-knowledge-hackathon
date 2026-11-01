@@ -55,9 +55,10 @@ So a 2023 vehicle falls in the newest band in 01-04 and in the middle band in 05
 Effective dates: 05/11, 05/19, 06/04, 08/26, 09/25/2026. The answer page also carries a second loan table with
 its own effective date (5/20/2024 in 01-04, 06/01/2026 in 05), so the page has two effective dates.
 **Stale trap pages:** `/homebuying-guidance` (all snapshots) shows purchase 30-yr 6.000/6.037 ($832,750), 6.000/6.061 ($300k),
-5.875/5.954 ($200k), 15-yr 5.500/5.623. `/mortgage-refi` (all) shows refinance 5.750–6.000. `/rates` in 01-04 keeps
+5.875/5.954 ($200k), 5.750/5.884 ($100k), 20-yr 5.875/6.005, 15-yr 5.500/5.623. `/personal/checking-accounts` (01-04) shows an older
+table: 30-yr 5.875 ($832,750/$300k), 5.750 ($200k), 5.625 ($100k), 20-yr 5.625, 15-yr 5.375. `/mortgage-refi` (all) shows refinance 5.750–6.000. `/rates` in 01-04 keeps
 stale refinance rows (e.g. 30-yr ≤ $832,750 at 6.375%), and 01-03 also show a "Mortgage Rate Relief Program" row at 5.125%.
-`/personal/checking-accounts` 01-04 shows 15-yr 5.375%. 03's `/rates` 30-yr ≤ $100k purchase APR is 6.256% while home-loans shows 6.262%.
+03's `/rates` 30-yr ≤ $100k purchase APR is 6.256% while home-loans shows 6.262%.
 
 ### Certificate specials (dividend rate / APY). Answer page: `/personal/savings-account`, `/rates`, `/business-rates`, `/personal/retirement` (IRA).
 

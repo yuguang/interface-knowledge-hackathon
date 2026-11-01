@@ -1,11 +1,13 @@
 """Track J: structural checks on the dev eval fixtures (no snapshot data needed except the
 `real` checks, which confirm that probe values literally appear in the cited snapshot)."""
 import json
+import random
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from scoring import contains
+from scoring import contains, score_conflicts
 
 ROOT = Path(__file__).resolve().parent.parent
 DEV = ROOT / "dev"
@@ -83,7 +85,7 @@ def test_refusal_shape():
     items = _jsonl(DEV / "refusal_eval.jsonl")
     refuse = [it for it in items if it["category"] == "should_refuse"]
     answer = [it for it in items if it["category"] != "should_refuse"]
-    assert len(refuse) == 13 and len(answer) == 10
+    assert len(refuse) == 13 and len(answer) == 12  # 10 look-alikes + solar/wedding (real answers)
 
 
 def test_conflicts_gold_valid():
@@ -94,6 +96,27 @@ def test_conflicts_gold_valid():
         assert set(g) == {"id", "topic_keywords", "values", "correct_value"}, g["id"]
         assert len(g["values"]) >= 2 and g["topic_keywords"], g["id"]
         assert g["correct_value"] in g["values"], g["id"]
+
+
+def _perfect_submission(gold):
+    # one Conflict-like object per gold entry: its keywords as topic, its values, the right winner
+    return [SimpleNamespace(topic=" / ".join(g["topic_keywords"]), values=list(g["values"]),
+                            resolution=g["correct_value"]) for g in gold]
+
+
+def test_conflicts_gold_order_independent():
+    """scoring.score_conflicts is greedy (first match wins), so every gold entry must match only
+    its own conflict: a perfect submission must score 1.0 in any order."""
+    gold = json.loads((DEV / "conflicts_gold.json").read_text())
+    subs = _perfect_submission(gold)
+    orders = [subs, subs[::-1]]
+    for seed in range(5):
+        shuffled = subs[:]
+        random.Random(seed).shuffle(shuffled)
+        orders.append(shuffled)
+    for order in orders:
+        rep = score_conflicts(gold, order)
+        assert rep["f1"] == 1.0 and rep["resolution_accuracy"] == 1.0, rep
 
 
 def test_retrieval_probe_shape():
@@ -108,6 +131,12 @@ def test_retrieval_probe_shape():
 def test_retrieval_probe_values_in_snapshot():
     from conftest import real_snapshots
     snaps = {s.snapshot_id: s for s in real_snapshots()}
+    counts = []
     for p in _jsonl(DEV / "retrieval_probe.jsonl"):
-        pages = snaps[p["snapshot_id"]].pages
-        assert any(all(v in pg.markdown for v in p["must_include"]) for pg in pages), p["question"]
+        n = sum(all(v in pg.markdown for v in p["must_include"]) for pg in snaps[p["snapshot_id"]].pages)
+        counts.append((n, p["snapshot_id"][:2], p["question"]))
+        assert n >= 1, p["question"]
+    for n, sid, q in sorted(counts, reverse=True)[:8]:
+        print(f"probe pages-with-all-values={n:3d}  {sid}  {q}")
+    # values must be specific enough that only a handful of pages hold them all
+    assert max(n for n, _, _ in counts) <= 12, sorted(counts, reverse=True)[:3]
