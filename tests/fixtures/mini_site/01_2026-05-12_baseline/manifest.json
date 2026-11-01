@@ -1,0 +1,54 @@
+{
+  "snapshot_id": "01_2026-05-12_baseline",
+  "taken_on": "2026-05-12",
+  "pages": [
+    {
+      "file": "pages/home.md",
+      "url": "https://www.samplecu.example/",
+      "title": "Sample Credit Union Home",
+      "fetched_at": "2026-05-12T12:00:00.000Z"
+    },
+    {
+      "file": "pages/auto-loans.md",
+      "url": "https://www.samplecu.example/loans/auto",
+      "title": "Auto Loans",
+      "fetched_at": "2026-05-12T12:00:00.000Z"
+    },
+    {
+      "file": "pages/calculator.md",
+      "url": "https://www.samplecu.example/tools/auto-loan-calculator",
+      "title": "Auto Loan Calculator",
+      "fetched_at": "2026-05-12T12:00:00.000Z"
+    },
+    {
+      "file": "pages/certificates.md",
+      "url": "https://www.samplecu.example/savings/certificate-specials",
+      "title": "Certificate Specials",
+      "fetched_at": "2026-05-12T12:00:00.000Z"
+    },
+    {
+      "file": "pages/share-savings.md",
+      "url": "https://www.samplecu.example/savings/share-savings",
+      "title": "Share Savings",
+      "fetched_at": "2026-05-12T12:00:00.000Z"
+    },
+    {
+      "file": "pages/branch.md",
+      "url": "https://www.samplecu.example/locations/main-street",
+      "title": "Main Street Branch",
+      "fetched_at": "2026-05-12T12:00:00.000Z"
+    },
+    {
+      "file": "pages/press.md",
+      "url": "https://www.samplecu.example/news/new-branch-opens",
+      "title": "Sample Credit Union Opens New Branch",
+      "fetched_at": "2026-05-12T12:00:00.000Z"
+    },
+    {
+      "file": "pages/routing.md",
+      "url": "https://www.samplecu.example/support/routing-number",
+      "title": "Routing Number",
+      "fetched_at": "2026-05-12T12:00:00.000Z"
+    }
+  ]
+}
