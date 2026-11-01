@@ -71,12 +71,24 @@ def norm_term_months(s: str) -> Optional[int]:
     return n * 12 if m.group(2).lower().startswith("y") else n
 
 
+def _amt(num: str) -> str:
+    v = num.replace(",", "")
+    if "." in v:
+        w, f = v.split(".", 1)
+        f = f.rstrip("0")
+        return f"{int(w)}.{f}" if f else str(int(w))
+    return str(int(v))
+
+
 def norm_band(s: str) -> Optional[str]:
-    nums = [_to_int(n) for n in re.findall(_NUM, s)]
+    pat = r"\$\s*(\d[\d,]*(?:\.\d+)?)" if "$" in s else r"(\d[\d,]*(?:\.\d+)?)"
+    nums = [_amt(n) for n in re.findall(pat, s)]
     low = s.lower()
     if not nums:
         return None
     if len(nums) >= 2:
+        if float(nums[0]) > float(nums[1]):
+            return None
         return f"{nums[0]}-{nums[1]}"
     if "+" in s or re.search(r"and (up|over|above)|or more|and more|over|above|at least", low):
         return f"{nums[0]}-inf"

@@ -1,6 +1,7 @@
 """Shared immutable types used by every stage of the knowledge system."""
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Optional
 
@@ -17,8 +18,14 @@ class PageInfo:
     page_date: Optional[str]  # ISO
 
 
+def chunk_hash(url: str, text: str) -> str:
+    """Chunk identity: sha256(url + "\\n" + text). It covers the url, so identical text on two pages is two chunks."""
+    return hashlib.sha256((url + "\n" + text).encode("utf-8")).hexdigest()
+
+
 @dataclass(frozen=True)
 class Chunk:
+    """`hash` must be chunk_hash(url, text); identity is per URL (R6)."""
     hash: str
     url: str
     title: str

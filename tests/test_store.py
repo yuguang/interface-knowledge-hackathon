@@ -1,5 +1,5 @@
 from conftest import mini_snapshots
-from kb.model import Chunk, FactObs, PageInfo, ResolvedFact
+from kb.model import Chunk, chunk_hash, FactObs, PageInfo, ResolvedFact
 from kb.store import Store
 
 S1, S2 = "01_2026-05-12_baseline", "02_2026-05-19_recrawl"
@@ -7,7 +7,7 @@ INFO = PageInfo("product", 80, None)
 
 
 def mk(text, url="u1"):
-    return Chunk(hash="h-" + text, url=url, title="T", heading_path="A > B", text=text)
+    return Chunk(hash=chunk_hash(url, text), url=url, title="T", heading_path="A > B", text=text)
 
 
 def store2():
@@ -22,7 +22,8 @@ def test_chunk_dedup_across_snapshots():
     c = mk("auto loan apr table")
     for sid in (S1, S2):
         pid = st.add_page(sid, "u1", "T", INFO, "ch")
-        st.add_chunks(sid, pid, [c])
+        got = st.add_chunks(sid, pid, [c])
+        assert got == [st.chunk(got[0].chunk_id)]
     assert len(st.new_chunks(S1)) == 1 and st.new_chunks(S2) == []
     n = st._db.execute("select count(*) from chunk").fetchone()[0]
     m = st._db.execute("select count(*) from chunk_snapshot").fetchone()[0]
@@ -89,3 +90,10 @@ def test_mini_fixture_shapes():
     for s in snaps:
         assert len(s.pages) == 8
         assert any("60 Months" in p.markdown and "auto" in p.markdown.lower() for p in s.pages)
+
+
+def test_same_text_different_url_is_two_chunks():
+    st = store2()
+    p = st.add_page(S1, "u1", "T", INFO, "x")
+    a, b = st.add_chunks(S1, p, [mk("same text", "u1"), mk("same text", "u2")])
+    assert a.chunk_id != b.chunk_id and st.chunk(b.chunk_id).chunk.url == "u2"

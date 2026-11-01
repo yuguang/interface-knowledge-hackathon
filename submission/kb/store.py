@@ -92,7 +92,7 @@ class Store:
                 if self.fts_available:
                     self._db.execute("INSERT INTO chunk_fts (rowid, text) VALUES (?,?)", (cid, c.text))
             self._db.execute("INSERT OR IGNORE INTO chunk_snapshot VALUES (?,?,?)", (cid, snapshot_id, page_id))
-            out.append(StoredChunk(cid, c))
+            out.append(self.chunk(cid))
         self._db.commit()
         return out
 

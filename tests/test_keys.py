@@ -36,6 +36,14 @@ def test_norm_band():
     assert norm_band("up to $100,000") == "0-100000"
 
 
+def test_norm_band_dollar_only_cents_and_reversed():
+    assert norm_band("Tier 1: $0 - $499") == "0-499"
+    assert norm_band("$10,000 - $24,999.99") == "10000-24999.99"
+    assert band_contains("10000-24999.99", 24999.5)
+    assert norm_band("$10,000 - $24,999") == "10000-24999"
+    assert norm_band("$500 - $100") is None
+
+
 def test_norm_term():
     assert norm_term_months("60 Months") == 60 and norm_term_months("5 years") == 60 and norm_term_months("17-month") == 17
 
