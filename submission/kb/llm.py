@@ -1,9 +1,21 @@
-"""Fail-soft, cached, deterministic Claude wrapper. Never raises: any problem yields None."""
+"""Fail-soft, cached, deterministic Claude wrapper. Never raises: any problem yields None.
+
+Request shape is pinned to the installed SDK (anthropic 2.3.0, API version 2026-10-21):
+- no sampling params (`temperature` etc. are rejected on this API version);
+- `json()` uses structured outputs, `output_config={"format": {"type": "json_schema", "schema": ...}}`,
+  and parses the returned text block (forced `tool_choice` is a 400 on Sonnet 5.5);
+- `output_config.effort = "low"` keeps thinking short (thinking can't be disabled on these models and
+  counts toward `max_tokens`);
+- a response whose `stop_reason` is not a normal completion is a failure: None, never cached.
+"""
 from __future__ import annotations
 
+import collections
 import concurrent.futures as cf
+import copy
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -13,7 +25,27 @@ from typing import Optional
 HAIKU = "claude-haiku-5-5"
 SONNET = "claude-sonnet-5-5"
 
-_TOOL = "emit"
+EFFORT = "low"
+_OK_STOPS = frozenset({"end_turn", "stop_sequence"})
+log = logging.getLogger("kb")
+
+
+class _Fail(Exception):
+    """Internal: a counted failure with a reason key."""
+
+    def __init__(self, reason: str, detail: str = ""):
+        super().__init__(detail)
+        self.reason = reason
+        self.detail = detail
+
+
+def _api_schema(schema: dict) -> dict:
+    """The schema as the API expects it (additionalProperties: false etc.), via the SDK's own transform."""
+    try:
+        from anthropic.lib._parse._transform import transform_schema
+        return transform_schema(copy.deepcopy(schema))
+    except Exception:
+        return schema
 
 
 class LLM:
@@ -21,6 +53,7 @@ class LLM:
         if enabled is None:
             enabled = bool(os.environ.get("ANTHROPIC_API_KEY")) and os.environ.get("KB_NO_LLM") != "1"
         self.enabled = enabled
+        self.failures: collections.Counter = collections.Counter()
         self._client = None  # built lazily, so a disabled LLM never imports the SDK
         self._lock = threading.Lock()
         self._db = None
@@ -59,57 +92,70 @@ class LLM:
             self._client = anthropic.Anthropic(max_retries=0)
         return self._client
 
+    def _record(self, reason: str, model: str, detail: str) -> None:
+        self.failures[reason] += 1
+        log.warning("llm %s failed (%s): %s", model, reason, detail[:200])
+
+    @staticmethod
+    def _request(model: str, system: str, user: str, max_tokens: int, schema: Optional[dict]) -> dict:
+        """The exact kwargs passed to `Messages.create` (besides `timeout`)."""
+        output_config: dict = {"effort": EFFORT}
+        if schema is not None:
+            output_config["format"] = {"type": "json_schema", "schema": _api_schema(schema)}
+        return dict(model=model, system=system, max_tokens=max_tokens,
+                    messages=[{"role": "user", "content": user}], output_config=output_config)
+
     def _call(self, timeout_s: float, **kw):
-        """Run messages.create with both the SDK timeout and a wall-clock guard."""
+        """Run messages.create with both the SDK timeout and a wall-clock guard; return the text output."""
         ex = cf.ThreadPoolExecutor(max_workers=1)
         try:
-            fut = ex.submit(lambda: self._get_client().messages.create(timeout=timeout_s, temperature=0, **kw))
-            return fut.result(timeout=timeout_s + 0.2)
+            fut = ex.submit(lambda: self._get_client().messages.create(timeout=timeout_s, **kw))
+            try:
+                resp = fut.result(timeout=timeout_s + 0.2)
+            except cf.TimeoutError:
+                raise _Fail("timeout", f"no response within {timeout_s}s")
+            except Exception as e:
+                if type(e).__name__ == "APITimeoutError":
+                    raise _Fail("timeout", f"{type(e).__name__}: {e}")
+                raise _Fail("exception", f"{type(e).__name__}: {e}")
         finally:
             ex.shutdown(wait=False)
+        stop = getattr(resp, "stop_reason", None)
+        if stop not in _OK_STOPS:
+            raise _Fail("truncated", f"stop_reason={stop}")
+        return "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
 
-    def _cached(self, key: str):
-        hit = self._get(key)
-        return (True, hit[0]) if hit else (False, None)
-
-    def json(self, model: str, system: str, user: str, schema: dict, max_tokens: int = 512,
-             timeout_s: float = 8.0) -> Optional[dict]:
+    def _run(self, model: str, system: str, user: str, max_tokens: int, timeout_s: float,
+             schema: Optional[dict]):
         if not self.enabled:
             return None
         try:
             key = self._key(model, system, user, schema)
-            found, val = self._cached(key)
-            if found:
-                return val
-            resp = self._call(
-                timeout_s, model=model, system=system, max_tokens=max_tokens,
-                messages=[{"role": "user", "content": user}],
-                tools=[{"name": _TOOL, "description": "Return the structured result.", "input_schema": schema}],
-                tool_choice={"type": "tool", "name": _TOOL})
-            for block in resp.content:
-                if getattr(block, "type", None) == "tool_use":
-                    out = dict(block.input)
-                    self._put(key, out)
-                    return out
-            return None
-        except Exception:
-            return None
-
-    def text(self, model: str, system: str, user: str, max_tokens: int = 400,
-             timeout_s: float = 8.0) -> Optional[str]:
-        if not self.enabled:
-            return None
-        try:
-            key = self._key(model, system, user, None)
-            found, val = self._cached(key)
-            if found:
-                return val
-            resp = self._call(timeout_s, model=model, system=system, max_tokens=max_tokens,
-                              messages=[{"role": "user", "content": user}])
-            out = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
-            if not out:
-                return None
+            hit = self._get(key)
+            if hit:
+                return hit[0]
+            out = self._call(timeout_s, **self._request(model, system, user, max_tokens, schema))
+            if schema is not None:
+                try:
+                    out = json.loads(out)
+                except ValueError as e:
+                    raise _Fail("parse", f"invalid JSON: {e}")
+                if not isinstance(out, dict):
+                    raise _Fail("parse", f"expected an object, got {type(out).__name__}")
+            elif not out:
+                raise _Fail("parse", "empty text")
             self._put(key, out)
             return out
-        except Exception:
-            return None
+        except _Fail as f:
+            self._record(f.reason, model, f.detail)
+        except Exception as e:
+            self._record("exception", model, f"{type(e).__name__}: {e}")
+        return None
+
+    def json(self, model: str, system: str, user: str, schema: dict, max_tokens: int = 2048,
+             timeout_s: float = 8.0) -> Optional[dict]:
+        return self._run(model, system, user, max_tokens, timeout_s, schema)
+
+    def text(self, model: str, system: str, user: str, max_tokens: int = 1024,
+             timeout_s: float = 8.0) -> Optional[str]:
+        return self._run(model, system, user, max_tokens, timeout_s, None)
