@@ -80,10 +80,10 @@ def test_po_box_not_address_org_phone():
 
 
 def test_award_and_program():
-    md = ("Forbes again named Dupaco one of the top credit unions. This was the fifth time Forbes recognized Dupaco.\n\n"
+    md = ("June 18, 2024\n\nForbes again named Dupaco one of the top credit unions. This was the fifth time Forbes recognized Dupaco.\n\n"
           "Dupaco partners on the Home$tart program. This initiative provides up to $15,000 in assistance.")
     obs = regex.extract(ctx(md))
-    assert get(obs, "org|award|name=forbes") == ["fifth"]
+    assert get(obs, "org|award|name=forbes;year=2024") == ["fifth"]
     assert get(obs, "program|detail|name=homestart") == ["$15,000"]
 
 
@@ -92,13 +92,38 @@ def test_quote_bounded_and_no_chunks():
     assert obs and len(obs[0].quote) <= 200 and obs[0].chunk_id is None
 
 
+def test_hours_and_address_share_branch_name():
+    md = "Lobby\nMonday-Friday: 9 a.m.-5 p.m.\n\n**Address:** 123 Main St, Dubuque, IA 52001"
+    obs = regex.extract(ctx(md))
+    assert {o.qualifiers["name"] for o in obs} == {"dubuque"}
+
+
+def test_award_keyed_by_year_and_news_counts_skipped():
+    md = "June 18, 2024\n\nThis was the fifth time Forbes recognized Dupaco.\nDupaco has 22 branches."
+    obs = regex.extract(ctx(md, url="https://www.dupaco.com/newsroom/forbes"))
+    assert get(obs, "org|award|name=forbes;year=2024") == ["fifth"]
+    assert not [o for o in obs if o.attribute == "count"]
+    obs = regex.extract(ctx("Dupaco has 22 branches.", url="https://www.dupaco.com/about"))
+    assert get(obs, "org|count|what=branches") == ["22"]
+
+
 @pytest.mark.real
-def test_real_routing_and_branch_count():
-    snap = [s for s in real_snapshots() if s.snapshot_id.startswith("05")][0]
-    obs = []
-    for p in snap.pages:
-        obs += regex.extract(ctx(p.markdown, p.url, p.title))
-    assert {o.value_norm for o in obs if o.fact_key == "org|routing_number|"} == {"273974581"}
-    counts = {o.value_norm for o in obs if o.fact_key == "org|count|what=branches"}
-    print("branch counts:", counts)
-    assert "22" in counts
+def test_real_routing_counts_awards_all_snapshots():
+    from kb import classify
+    snaps = real_snapshots()
+    assert len(snaps) == 5
+    for snap in snaps:
+        obs = []
+        for p in snap.pages:
+            info = classify.classify_page(p.url, p.title, p.markdown, snap.taken_on)
+            c = PageContext(snap.snapshot_id, snap.taken_on, p.url, p.title, info, p.markdown, [])
+            obs += regex.extract(c)
+        by = {}
+        for o in obs:
+            by.setdefault(o.fact_key, set()).add(o.value_norm)
+        assert by["org|routing_number|"] == {"273974581"}, snap.snapshot_id
+        # no evergreen page states a branch count, and dated releases are skipped (R33)
+        assert "org|count|what=branches" not in by, snap.snapshot_id
+        awards = {k: v for k, v in by.items() if k.startswith("org|award|")}
+        assert awards == {"org|award|name=forbes;year=2023": {"fourth"},
+                          "org|award|name=forbes;year=2024": {"fifth"}}, snap.snapshot_id

@@ -85,8 +85,9 @@ _DATELINE = re.compile(r"^([A-Z][A-Z .]{2,30}),\s+(?:Iowa|Wis\.?|Wisconsin|Ill\.
 
 
 def _branch_name(ctx: PageContext, lines: list[str], upto: int) -> str:
-    """Branch slug: nearest preceding full address' city, else dateline city, else title slug."""
-    for i in range(min(upto, len(lines) - 1), -1, -1):
+    """Branch slug (shared by hours, phone and address): nearest full address' city, else dateline city, else title slug."""
+    order = list(range(min(upto, len(lines) - 1), -1, -1)) + list(range(upto + 1, len(lines)))
+    for i in order:  # nearest preceding address, else the first following one
         m = _ADDR.search(lines[i])
         if m and _STREET_WORD.search(m.group(1)):
             return slug(m.group(2))
@@ -245,7 +246,16 @@ def _routing(em: _Emitter, lines: list[str], sentences: list[str]) -> None:
 _COUNT = re.compile(r"\b(\d{2})\s+(?:full-service\s+)?(?:branches|branch (?:office )?locations|branch offices)\b", re.I)
 
 
+def _evergreen(ctx: PageContext) -> bool:
+    """Not a dated news/blog page (R33): old press-release boilerplate must not share keys with current values."""
+    if ctx.info.page_type in ("news", "blog"):
+        return False
+    return not re.search(r"/(?:newsroom|blog|learn/blog)(?:/|$)", ctx.url.lower())
+
+
 def _counts(em: _Emitter, lines: list[str], sentences: list[str]) -> None:
+    if not _evergreen(em.ctx):
+        return
     for s in sentences:
         m = _COUNT.search(s)
         if not m or re.search(r"leaders|Home Savings|acqui", s, re.I):
@@ -292,13 +302,28 @@ _ORD = ("first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eigh
 _AWARD = re.compile(rf"\b({'|'.join(_ORD)})\s+time\b(?!\s+in just)", re.I)
 
 
+def _byline_year(lines: list[str]) -> str:
+    for ln in lines[:15]:
+        m = re.fullmatch(rf"(?:{_MONTHS})\s+\d{{1,2}},\s+(\d{{4}})", ln)
+        if m:
+            return m.group(1)
+    return ""
+
+
 def _awards(em: _Emitter, lines: list[str], sentences: list[str]) -> None:
+    """Keyed by year (R33): each year's ranking is its own fact, so dated releases never conflict with each other."""
     for s in sentences:
         if "forbes" not in s.lower() or "dupaco" not in s.lower():
             continue
         m = _AWARD.search(s)
-        if m:
-            em.add("org", "award", {"name": "forbes"}, m.group(1), m.group(1).lower(), s)
+        if not m:
+            continue
+        ym = re.search(r"\b(20\d\d)\b", s)
+        year = ym.group(1) if ym else (em.ctx.info.page_date or _byline_year(lines))
+        year = year[:4]
+        if not re.fullmatch(r"20\d\d", year):
+            continue
+        em.add("org", "award", {"name": "forbes", "year": year}, m.group(1), m.group(1).lower(), s)
 
 
 def _programs(em: _Emitter, lines: list[str]) -> None:
