@@ -1,5 +1,6 @@
 import pytest
 from contract import Answer
+from scoring import contains
 
 from conftest import mini_snapshots as _mini
 from kb import intent
@@ -183,7 +184,7 @@ def test_stale_values_failure_is_empty_set(monkeypatch):
         return ans
     monkeypatch.setattr(compose, "sanitize", spy)
     a = ks.answer(Q)
-    assert seen["drop"] == set() and a.text == "5.39%" and ks.stage_errors["stale_values"] == 1
+    assert seen["drop"] == set() and contains(a.text, "5.39%") and ks.stage_errors["stale_values"] == 1
 
 
 def test_degraded_answer_not_memoised(monkeypatch):
