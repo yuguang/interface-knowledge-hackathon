@@ -210,9 +210,26 @@ def render_facts(question: str, intent: Intent, selected: list[ResolvedFact], sn
 _PROSE_SYSTEM = (
     "You answer a credit-union member's question using only the sections of the Dupaco website provided. "
     "State current values only, with no history of earlier values. Never mention 'facts' or 'context'. "
-    "Never ask the member a question. Answer in at most 3 sentences. If the sections do not answer the question, "
-    "reply with exactly: NONE"
+    "Never ask the member a question. Answer in at most 3 sentences. Each section shows its page URL and the "
+    "targets of links it contains; when the question asks for a link, web address or where to go online, give the "
+    "URL of the page or link that serves it (a section's own page URL counts). "
+    "Answer directly; never describe what the sections lack or answer a different question. "
+    "If the sections do not answer the question, reply with exactly: NONE"
 )
+# The model saying the sections lack the asked value, or ending with NONE after an explanation: not an answer.
+_DISCLAIMER = re.compile(r"\b(?:sections?|provided (?:information|text)|information provided)\b[^.]*?"
+                         r"\b(?:don't|do not|doesn't|does not|didn't)\s+(?:state|give|include|list|mention|say"
+                         r"|specify|provide|contain|show)", re.I)
+_NONE_TOKEN = re.compile(r"(?:^|\s)NONE\.?\s*$")
+MAX_SECTION_LINKS = 8
+
+
+def _section(h: Hit, links: Optional[dict]) -> str:
+    """One section for the prose prompt: page URL and heading, text, then targets of links whose text it shows."""
+    flat = " ".join(h.text.split())
+    shown = [f"{t}: {href}" for t, href in (links or {}).get(h.url, []) if t in flat][:MAX_SECTION_LINKS]
+    head = f"[{h.url}" + (f" | {h.heading_path}]" if h.heading_path else "]")
+    return head + "\n" + h.text + ("\nLinks: " + "; ".join(shown) if shown else "")
 
 
 def _clean_prose(text: str) -> str:
@@ -255,12 +272,15 @@ def _extractive(question: str, text: str, limit: int = 400) -> str:
     return out or sents[order[0]][:limit]
 
 
-def render_prose(question: str, intent: Intent, hits: list[Hit], snapshot_id: str, llm: LLM) -> Answer:
+def render_prose(question: str, intent: Intent, hits: list[Hit], snapshot_id: str, llm: LLM,
+                 links: Optional[dict[str, list[tuple[str, str]]]] = None) -> Answer:
+    """`links`: page url -> (link text, target) pairs of that page (Store.links)."""
     top = hits[0]
-    sections = "\n\n".join(f"[{h.heading_path}]\n{h.text}" for h in hits[:4])
+    sections = "\n\n".join(_section(h, links) for h in hits[:4])
     out = llm.text(SONNET, _PROSE_SYSTEM, f"Question: {question}\n\nSections:\n{sections}", max_tokens=1024)
-    if out is not None and out.strip().rstrip(".").upper() == "NONE":  # the sections don't answer it
-        return refusal(question)
+    if out is not None and (out.strip().rstrip(".").upper() == "NONE" or _NONE_TOKEN.search(out)
+                            or _DISCLAIMER.search(_sentences(out.strip())[0] if out.strip() else "")):
+        return refusal(question)  # the sections don't answer it
     text = _clean_prose(out) if out else ""
     if not text:  # LLM failure (None) or nothing usable left: extract from the top section
         text = _extractive(question, _strip_prefix(top.text, top.heading_path))

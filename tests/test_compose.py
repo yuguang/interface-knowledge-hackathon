@@ -262,3 +262,35 @@ def test_extractive_strips_chunk_title_prefix():
     assert "| Dupaco" not in a.text and "Galena Chrysler" in a.text
     h = Hit(5, "https://www.dupaco.com/x", "", "Checking | Dupaco\nFree checking has no monthly fee.", 1.0, SID)
     assert render_prose("monthly fee?", PI, [h], SID, NoLLM()).text == "Free checking has no monthly fee."
+
+
+def test_prose_sections_show_page_url_and_link_targets():
+    """A "what link / how do I join online" answer needs the page URL and the targets of links the section shows."""
+    llm = FakeLLM("Join online at https://join.dupaco.com/.")
+    h = Hit(5, "https://www.dupaco.com/about/join", "Join", "Ready to join?\nBecome a member\nContinue later", 1.0, SID)
+    links = {h.url: [("Become a member", "https://join.dupaco.com/"), ("Unrelated footer", "https://x.example/")]}
+    a = render_prose("How do I join online?", PI, [h], SID, llm, links=links)
+    system, user = llm.calls[0]
+    assert "https://www.dupaco.com/about/join" in user
+    assert "Become a member: https://join.dupaco.com/" in user and "x.example" not in user
+    assert "link" in system.lower()
+    assert a.text == "Join online at https://join.dupaco.com/."
+    render_prose("How do I join online?", PI, [h], SID, llm)  # links are optional
+    assert "join.dupaco.com" not in llm.calls[1][1]
+
+
+@pytest.mark.parametrize("out", [
+    "The provided information doesn't state a specific number of branches. It only says Dupaco has 600+ employees. NONE",
+    "The sections don't give a specific interest rate for a construction loan. It is a 1/1 ARM that can adjust 2%.",
+    "NONE.",
+])
+def test_prose_disclaimer_or_trailing_none_is_refusal(out):
+    """The model sometimes explains what the sections lack (and answers a neighbouring question) instead of NONE."""
+    a = render_prose("How many branches?", PI, [HIT], SID, FakeLLM(out))
+    assert not a.confident and not _numbers(a.text)
+
+
+def test_prose_meta_lead_in_is_not_a_disclaimer():
+    out = "Based on the sections provided, the locator is at https://www.dupaco.com/contact. It lists every branch."
+    a = render_prose("Branch locator URL?", PI, [HIT], SID, FakeLLM(out))
+    assert a.confident and "dupaco.com/contact" in a.text

@@ -244,3 +244,26 @@ def test_fact_path_drop_still_uses_selected(monkeypatch):
     monkeypatch.setattr(resolve, "stale_values", stale)
     ks.answer(Q)
     assert seen["keys"] == ["auto_loan|apr|term=60"]
+
+
+# ---- Stage 3 Task 3.1
+
+def test_prose_answer_gets_link_targets_of_picked_pages(monkeypatch):
+    """Ingest keeps each page's link targets (clean() drops them); the prose composer gets those of picked pages."""
+    from contract import Page, Snapshot
+    from kb import compose
+    ks = build()
+    url = "https://www.dupaco.com/about/join"
+    md = "# Join\n\nReady to join Dupaco online?\n\n[Become a member](https://join.dupaco.com/)\n"
+    other = [Page(f"https://www.dupaco.com/p{i}", f"P{i}", f"# P{i}\n\nPage {i} text.\n", "2026-09-28T00:00:00Z")
+             for i in range(5)]  # one page alone would make every line boilerplate
+    ks.ingest(Snapshot("05_2026-09-28_latest", "2026-09-28", [Page(url, "Join", md, "2026-09-28T00:00:00Z")] + other))
+    seen = {}
+
+    def prose(question, it, hits, sid, llm, links=None):
+        seen["links"] = links
+        return Answer(text="Use the Become a member button.")
+    monkeypatch.setattr(compose, "render_prose", prose)
+    monkeypatch.setattr(ks.retriever, "pick", lambda q, hits: hits[:1])
+    ks.answer("How do I join Dupaco online?")
+    assert seen["links"] == {url: [("Become a member", "https://join.dupaco.com/")]}

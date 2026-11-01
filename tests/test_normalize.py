@@ -120,3 +120,13 @@ def test_real_dedup_ratio():
     wall = time.time() - t0
     print(f"\nDISTINCT_HASHES={len(hashes)} TOTAL_CHUNKS={total} WALL={wall:.1f}s")
     assert 0 < len(hashes) <= 30_000
+
+
+def test_page_links_keep_absolute_targets_with_link_text():
+    from kb.normalize import page_links
+    md = ('[Become a member](https://join.dupaco.com/)\n![logo](https://x/l.png)\n'
+          '[Rates](/rates "t") [call](tel:800) [mail](mailto:a@b) [Rates](https://x/r) [Join](https://join.dupaco.com/)\n'
+          '[**Apply** now](https://apply.example.com/a?b=(1))')
+    assert page_links(md) == [("Become a member", "https://join.dupaco.com/"), ("Rates", "https://x/r"),
+                              ("Join", "https://join.dupaco.com/"), ("Apply now", "https://apply.example.com/a?b=(1)")]
+    assert page_links("no links here") == []

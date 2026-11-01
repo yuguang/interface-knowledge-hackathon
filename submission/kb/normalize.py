@@ -24,6 +24,22 @@ def _strip_markup(text: str) -> str:
     return _LINK.sub(r"\1", _IMAGE.sub("", text))
 
 
+_LINK_PARTS = re.compile(r"\[([^\]]*)\]\(((?:[^()]|\([^()]*\))*)\)")
+
+
+def page_links(markdown: str) -> list[tuple[str, str]]:
+    """(link text, absolute http(s) target) for each distinct text link, in page order. clean() drops the
+    targets, so a "where do I go online" answer keeps them here."""
+    out: list[tuple[str, str]] = []
+    for m in _LINK_PARTS.finditer(_IMAGE.sub("", markdown)):
+        text = " ".join(re.sub(r"[*_`\\]", "", m.group(1)).split())
+        parts = m.group(2).split()
+        href = parts[0] if parts else ""
+        if text and re.match(r"https?://", href, re.I) and (text, href) not in out:
+            out.append((text, href))
+    return out
+
+
 def _key(line: str) -> str:
     return " ".join(_strip_markup(line).split())
 
