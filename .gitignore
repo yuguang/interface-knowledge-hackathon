@@ -1,0 +1,11 @@
+snapshots_zip/
+snapshots/0*/
+submission/.cache/
+results/
+.venv/
+__pycache__/
+*.swp
+.DS_Store
+hackathon-knowledge-kit-participant/
+.superpowers/
+Knowledge-Hackathon-Assignment.pdf
