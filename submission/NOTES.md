@@ -18,7 +18,8 @@ to the refusal text instead of raising.
      wallets, ...). Lookups go to `submission/data/facts_cache.jsonl` first, then to the API. The LLM
      time is capped at 300 s per snapshot; once the cap is spent, remaining uncached chunks are skipped.
      Answers are cached in `submission/.cache/llm.sqlite`. The committed `facts_cache.jsonl` is
-     currently empty, so a fresh clone calls the API for these facts at ingest.
+     currently empty (the build was deferred), so a fresh clone calls the API for these facts at
+     ingest. Cold ingest time therefore depends on API latency, up to the 300 s/snapshot cap.
 4. Resolve every fact key in the snapshot with the authority policy below, and store the winner per
    snapshot.
 5. Index the snapshot's chunks for keyword search (SQLite FTS5; `rank_bm25` when the SQLite build lacks
@@ -166,9 +167,16 @@ resolution accuracy 0.909.
 | starter | 0.093 | – | – | 0.58 s |
 | `conflicts@a0cc0d4` (latest scored) | 0.790 | 0.847 | 0.784 | 3.11 s |
 
-In the latest public run, the harness reported final score 0.787 and ingest 387.6 s. It found 0
-errors, 0 stale-trap hits, and paraphrase and repeat consistency of 1.0. After a0cc0d4, only
+In the latest public run, the harness reported final score 0.787 and ingest 387.6 s. These two
+figures come from that local run's `results/score_run/conflicts/public/report.json`. `results/` is
+not committed, and `dev/scores.csv` has no columns for them. The run found 0 errors, 0 stale-trap hits, and paraphrase and repeat consistency of 1.0. After a0cc0d4, only
 `kb/conflicts.py` changed (how prose figures treat years). `dev/sample_conflicts.py --score` at 200bc53
 still emits the same 29 conflicts with F1 0.784. p95 is above the
 1.5 s target: the Haiku picker and Sonnet composer run synchronously on the retrieval path when their
 cache is cold.
+
+**Warm ingest is not fast.** Only LLM responses persist between runs (`submission/.cache/llm.sqlite`).
+Every `build()` deletes the SQLite store, and the dense index deletes its Chroma folder at startup. A
+second run therefore re-chunks, re-extracts and re-embeds every chunk with the ONNX model, and none of
+that is cached. Local runs that reused the LLM cache still took 376–456 s to ingest, so the plan's
+"under 2 min warm" target is not met. The hard limit of 30 min is met.

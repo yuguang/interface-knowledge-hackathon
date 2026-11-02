@@ -21,6 +21,12 @@
 #      warm run:  the same command again in the same clone (LLM cache in submission/.cache/ now warm)
 #   5. print ingest seconds, p95 and max latency, and check them against the targets below
 # Targets (plan Task 3.4 Step 3): ingest < 600 s cold, < 120 s warm; p95 <= 1.5 s; max < 10 s.
+# Known FAILs with the current code (kept as the plan's targets, not relaxed):
+#   - warm ingest < 120 s: only LLM responses persist between runs. build() deletes kb.sqlite and
+#     DenseIndex deletes the Chroma folder, so every run re-chunks, re-extracts and re-embeds everything
+#     (local runs reusing the LLM cache: 376-456 s).
+#   - p95 <= 1.5 s: last local p95 was 3.11 s.
+# The warm run shares the clone and submission/.cache/ with the cold run on purpose: that is what "warm" means.
 # Exit status: 0 when every run completed and every target is met, 1 otherwise.
 # "Cold" means a fresh clone: empty submission/.cache/ (LLM cache, SQLite, Chroma index). Chroma's ONNX
 # embedding model lives in ~/.cache/chroma/ and is downloaded only if this machine lacks it.
@@ -141,4 +147,5 @@ done
 echo "== 5. timings"
 summarize results/clean_env/cold/report.json cold 600 || STATUS=1
 summarize results/clean_env/warm/report.json warm 120 || STATUS=1
+echo "note: 'warm ingest < 120 s' and 'p95 <= 1.5 s' are known FAILs with the current code (see header)."
 exit "$STATUS"

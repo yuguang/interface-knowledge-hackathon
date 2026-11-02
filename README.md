@@ -53,22 +53,27 @@ What to expect on the first run from a fresh clone:
 - The harness unpacks the zips. Chroma downloads its ONNX embedding model (all-MiniLM-L6-v2, about
   80 MB) into `~/.cache/chroma/` if this machine doesn't have it yet.
 - Ingest makes Claude Haiku calls for prose facts, capped at 300 s of LLM time per snapshot.
-- In our last local scored run, ingest took 387.6 s. A cold fresh clone has not been timed yet. The
-  harness's 30-minute ingest limit is a hard cap.
-- LLM responses are cached in `submission/.cache/llm.sqlite`. The fact store and search index in
-  `submission/.cache/` are rebuilt on every run.
+- Cold ingest time depends on Anthropic API latency.
+- In our last local scored run, ingest took 387.6 s. That figure is from a local run's `results/`
+  report, which is not committed. A cold fresh clone has not been timed yet. The harness's 30-minute
+  ingest limit is a hard cap.
+- LLM responses are cached in `submission/.cache/llm.sqlite`. Every run rebuilds the fact store and the
+  Chroma index in `submission/.cache/`, including re-embedding every chunk.
+- A warm second run is therefore not much faster. Local runs that reused the LLM cache took 376–456 s
+  to ingest, which misses the plan's "under 2 min warm" target.
 
 Latest local scores (`dev/scores.csv`, public eval with `--judge`):
 - QA 0.790 (the starter scores 0.093).
 - Conflicts F1 0.784 on our dev gold.
-- Final score 0.787, which includes the conflicts pillar scored against our dev gold.
+- Final score 0.787, which includes the conflicts pillar scored against our dev gold. This is from a
+  local run's `results/` report, which is not committed; `dev/scores.csv` has no final-score column.
 - p95 latency 3.11 s.
 
 ## Repository layout
 
 | Path | What |
 |---|---|
-| `submission/` | The solution: `solution.py`, `kb/` package, `requirements.txt`, `NOTES.md`, `data/facts_cache.jsonl` (committed LLM-extraction cache; derived values only, no page text). |
+| `submission/` | The solution: `solution.py`, `kb/` package, `requirements.txt`, `NOTES.md`, `data/facts_cache.jsonl` (LLM-extraction cache, **currently empty; build deferred**, so prose facts are extracted live at ingest). |
 | `harness/`, `eval/`, `starter/` | The organizers' kit (unchanged). |
 | `tests/` | Unit and integration tests (after setup, `pip install -r requirements-dev.txt`, then `pytest`). |
 | `dev/` | Dev fixtures (paraphrase, as_of, refusal sets; conflicts gold), `score_run.sh`, `clean_env_check.sh`, `scores.csv`. |
@@ -82,5 +87,8 @@ Latest local scores (`dev/scores.csv`, public eval with `--judge`):
 3. copying the zips;
 4. the eval with `--judge`, run cold and then warm.
 
-It prints the ingest time, p95 and max latency for both runs. `dev/clean_env_check.sh --preflight`
+It prints the ingest time, p95 and max latency for both runs. Two checks are expected to FAIL with the
+current code:
+- warm ingest under 120 s (see above);
+- p95 of 1.5 s or less (currently 3.11 s). `dev/clean_env_check.sh --preflight`
 runs only the cheap part: prerequisites, clone, zip copy and the harness's auto-unpack.
