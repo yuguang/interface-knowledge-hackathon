@@ -278,10 +278,26 @@ def _extractive(question: str, text: str, limit: int = 400) -> str:
     return out or sents[order[0]][:limit]
 
 
+_ACCOUNT_NOUNS = {"visa", "ira"}
+
+
+def _name_in_sections(intent: Intent, hits: list[Hit]) -> bool:
+    """A product question naming a specific account (intent qualifier `name`, e.g. "platinum-elite-visa") is only
+    answerable from sections that mention every word of that name; branch/org/program names are not checked."""
+    name = (intent.qualifiers or {}).get("name")
+    if not name or not intent.product or intent.product in ("branch", "org", "program"):
+        return True
+    want = {t for t in name.split("-") if t and t not in _ACCOUNT_NOUNS}
+    have = set(re.findall(r"[a-z0-9]+", " ".join(h.text for h in hits).lower()))
+    return want <= have
+
+
 def render_prose(question: str, intent: Intent, hits: list[Hit], snapshot_id: str, llm: LLM,
                  links: Optional[dict[str, list[tuple[str, str]]]] = None) -> Answer:
     """`links`: page url -> (link text, target) pairs of that page (Store.links)."""
     top = hits[0]
+    if not _name_in_sections(intent, hits[:4]):
+        return refusal(question)  # "Sapphire Money Market": the named account appears in none of the sections
     sections = "\n\n".join(_section(h, links, question) for h in hits[:4])
     out = llm.text(SONNET, _PROSE_SYSTEM, f"Question: {question}\n\nSections:\n{sections}", max_tokens=1024)
     if out is not None and (out.strip().rstrip(".").upper() == "NONE" or _NONE_TOKEN.search(out)

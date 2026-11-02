@@ -112,6 +112,22 @@ def test_prose_uses_llm_and_prompt_rules():
     assert "3 sentences" in llm.calls[0][0] and "question" in llm.calls[0][0].lower()
 
 
+def test_prose_refuses_account_name_absent_from_sections():
+    """ref-sapphire / ref-elite-visa: a named account no section mentions is refused, never answered from a neighbour."""
+    hit = Hit(1, "https://www.dupaco.com/mm", "A", "Achieve Money Market pays up to 3.66% APY.", 1.0, SID)
+    llm = FakeLLM("The money market pays 3.66% APY.")
+    it = Intent("fact", "money_market", "apy", {"segment": "personal", "name": "sapphire"}, None, "q", "k")
+    a = render_prose("What APY does the Sapphire Money Market pay?", it, [hit], SID, llm)
+    assert a.confident is False and "isn't listed on the website" in a.text and not llm.calls
+    it = Intent("fact", "credit_card", "apr", {"name": "platinum-elite-visa"}, None, "q", "k")
+    assert render_prose("q", it, [Hit(1, "u", "A", "Platinum Visa 12.50% APR.", 1.0, SID)], SID, llm).confident is False
+    # a real named account mentioned in the sections is answered; the account noun itself need not appear
+    it = Intent("fact", "money_market", "apy", {"name": "achieve"}, None, "q", "k")
+    assert render_prose("q", it, [hit], SID, llm).text == "The money market pays 3.66% APY."
+    it = Intent("fact", "credit_card", "apr", {"name": "platinum-visa"}, None, "q", "k")
+    assert render_prose("q", it, [Hit(1, "u", "A", "Platinum card: 12.50% APR.", 1.0, SID)], SID, llm).confident
+
+
 def test_no_question_back():
     for llm in (NoLLM(), FakeLLM("Which product would you like? It has no fee.")):
         assert "?" not in render_prose(PI.cleaned_question, PI, [HIT], SID, llm).text
