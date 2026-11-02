@@ -137,8 +137,10 @@ resolution accuracy 0.909.
 ## API keys, paid APIs, and the no-LLM fallback
 
 - **`ANTHROPIC_API_KEY` is required** for full quality. The only network client in `submission/` is
-  the `anthropic` SDK, which calls the Anthropic API. Answers come only from the five local snapshots.
-  The system never fetches the live website.
+  the `anthropic` SDK, which calls the Anthropic API. Chroma's `DefaultEmbeddingFunction`
+  (`submission/kb/retrieval/dense.py`) also downloads its ONNX embedding model (all-MiniLM-L6-v2) on
+  first use, into `~/.cache/chroma/`. That is a one-time model download, not a website or API call.
+  Answers come only from the five local snapshots. The system never fetches the live website.
 - **Paid API disclosure:** Anthropic Claude API.
   - **Claude Haiku 5.5** (`claude-haiku-5-5`): intent parsing when the rules find no product, the
     section picker, and prose-fact extraction at ingest.

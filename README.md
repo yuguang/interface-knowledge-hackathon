@@ -59,8 +59,8 @@ What to expect on the first run from a fresh clone:
   ingest limit is a hard cap.
 - LLM responses are cached in `submission/.cache/llm.sqlite`. Every run rebuilds the fact store and the
   Chroma index in `submission/.cache/`, including re-embedding every chunk.
-- A warm second run is therefore not much faster. Local runs that reused the LLM cache took 376–456 s
-  to ingest, which misses the plan's "under 2 min warm" target.
+- Only the LLM cache persists between runs. Local runs that reused it took 376–456 s to ingest, well
+  over the plan's "under 2 min warm" target.
 
 Latest local scores (`dev/scores.csv`, public eval with `--judge`):
 - QA 0.790 (the starter scores 0.093).
