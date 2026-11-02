@@ -295,6 +295,13 @@ def select_for_intent(intent: Intent, resolved: list[ResolvedFact]) -> list[Reso
                 newest[g] = max(newest.get(g, float("-inf")), _hi(fq["model_year"]))
         sel = [s for s in sel if "model_year" not in s[3] or _hi(s[3]["model_year"]) == newest[
             tuple(sorted((k, v) for k, v in s[3].items() if k != "model_year"))]]
+    if "year" not in q:  # year-keyed facts (Forbes awards, R33): an undated question means the latest year
+        latest: dict[tuple, str] = {}
+        for s in sel:
+            if "year" in s[3]:
+                g = (s[1], s[2], _group(s[3], "year"))
+                latest[g] = max(latest.get(g, ""), s[3]["year"])
+        sel = [s for s in sel if "year" not in s[3] or s[3]["year"] == latest[(s[1], s[2], _group(s[3], "year"))]]
     sel = sorted(sel, key=_order)
     if intent.superlative in ("highest", "lowest"):
         nums = [(n, s) for s in sel if (n := _num(s[0].value)) is not None]

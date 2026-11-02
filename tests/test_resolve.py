@@ -89,6 +89,17 @@ def test_auto_newest_model_year():
     assert [r.value for r in sel] == ["6%"]
 
 
+def test_undated_award_question_selects_latest_year():
+    """dup-087: 2023 release says "fourth", 2024 says "fifth"; an undated question must not state the stale one."""
+    st = build([obs("org|award|name=forbes;year=2023", "fourth", ptype="news"),
+                obs("org|award|name=forbes;year=2024", "fifth", url="https://x/news2", ptype="news")])
+    res = resolve_snapshot(st, "s5")
+    sel = select_for_intent(intent("org", "award", {"name": "forbes"}), res)
+    assert [r.value for r in sel] == ["fifth"]
+    sel = select_for_intent(intent("org", "award", {"name": "forbes", "year": "2023"}), res)
+    assert [r.value for r in sel] == ["fourth"]
+
+
 def test_missing_qualifier_no_match_and_exact():
     st = build([obs("certificate|apy|term=12", "4%"), obs("certificate|apy|term=24", "3%")])
     res = resolve_snapshot(st, "s5")
