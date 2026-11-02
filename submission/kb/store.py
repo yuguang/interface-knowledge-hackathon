@@ -8,7 +8,7 @@ from typing import Optional
 from urllib.parse import urlsplit
 
 from .keys import parse_key
-from .model import Chunk, FactObs, PageInfo, ResolvedFact, StoredChunk
+from .model import Chunk, FactObs, Hit, PageInfo, ResolvedFact, StoredChunk
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS snapshot (
@@ -81,6 +81,13 @@ class Store:
         self._db.commit()
         return pid
 
+    def page_dates(self, snapshot_id: str, urls: list[str]) -> dict[str, Optional[str]]:
+        out: dict[str, Optional[str]] = {}
+        for u in urls:
+            r = self._db.execute("SELECT page_date FROM page WHERE snapshot_id=? AND url=?", (snapshot_id, u)).fetchone()
+            out[u] = r[0] if r else None
+        return out
+
     def add_links(self, snapshot_id: str, url: str, links: list[tuple[str, str]]) -> None:
         """A page's (link text, target) pairs; duplicates are ignored, first-seen order kept."""
         n = self._db.execute("SELECT COUNT(*) FROM page_link WHERE snapshot_id=? AND url=?",
@@ -123,6 +130,13 @@ class Store:
                    AND s.taken_on < (SELECT taken_on FROM snapshot WHERE snapshot_id=?))
                ORDER BY c.chunk_id""", (snapshot_id, snapshot_id)).fetchall()
         return [self._stored(r) for r in rows]
+
+    def page_chunks(self, snapshot_id: str, url: str) -> list[Hit]:
+        """All sections of one page in page order (score 0): context around a fact the page states."""
+        rows = self._db.execute(
+            "SELECT c.* FROM chunk c JOIN chunk_snapshot cs ON cs.chunk_id=c.chunk_id WHERE cs.snapshot_id=? AND c.url=? "
+            "ORDER BY c.chunk_id", (snapshot_id, url)).fetchall()
+        return [Hit(r["chunk_id"], r["url"], r["heading_path"], r["text"], 0.0, snapshot_id) for r in rows]
 
     def chunk(self, chunk_id: int) -> StoredChunk:
         r = self._db.execute("SELECT * FROM chunk WHERE chunk_id=?", (chunk_id,)).fetchone()

@@ -172,7 +172,13 @@ class KnowledgeSystem:
                 sel = []
         ans = None
         from_facts = False
+        ambiguous: Optional[list] = None
         if sel:
+            try:  # several subjects matched and the question names none: let retrieval complete the answer
+                ambiguous = resolve.subject_split(it, sel)
+            except Exception:
+                self._fail("subject_split", q80)
+        if sel and ambiguous is None:
             try:
                 ans = compose.render_facts(question, it, sel, sid)
                 from_facts = True
@@ -181,17 +187,29 @@ class KnowledgeSystem:
                 degraded = True
         if ans is None:
             try:
-                picked = self.retriever.pick(it.cleaned_question, self.retriever.search(it.cleaned_question, sid))
+                rq = it.cleaned_question
+                if ambiguous:  # on-subject facts name what to look for ("charter area"): widen the search with them
+                    rq = f"{rq} {' '.join(r.value for r in ambiguous)}"
+                picked = self.retriever.pick(rq, self.retriever.search(rq, sid))
+                if ambiguous:  # the rest of each fact's own page (the states of a charter area sit in another section)
+                    seen_ids = {h.chunk_id for h in picked}
+                    budget = 6000
+                    for r in ambiguous[:2]:
+                        for h in self.store.page_chunks(sid, r.winner.url):
+                            if h.chunk_id not in seen_ids and budget > 0:
+                                picked.append(h)
+                                budget -= len(h.text)
                 links = {h.url: self.store.links(sid, h.url) for h in picked}
-                ans = compose.render_prose(question, it, picked, sid, self.llm, links=links) if picked \
-                    else self._refusal(question)
+                dates = self.store.page_dates(sid, [h.url for h in picked])
+                ans = compose.render_prose(question, it, picked, sid, self.llm, links=links, dates=dates,
+                                           facts=ambiguous, limit=24 if ambiguous else 4) if (picked or ambiguous) else self._refusal(question)
             except Exception:
                 self._fail("retrieval", q80)
                 degraded = True
                 ans = self._refusal(question)
         try:
             # Prose answers about a known product/attribute (I8): strip values stale for any of its candidate keys.
-            basis = sel if from_facts else resolve.matching(it, cands)
+            basis = sel if from_facts else (ambiguous or resolve.matching(it, cands))
             drop = resolve.stale_values(self.store, basis)
         except Exception:
             self._fail("stale_values", q80)

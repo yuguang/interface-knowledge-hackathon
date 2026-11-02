@@ -216,6 +216,9 @@ _PROSE_SYSTEM = (
     "targets of links it contains; when the question asks for a link, web address or where to go online, give the "
     "URL of the page or link that serves it (a section's own page URL counts). "
     "Answer directly; never describe what the sections lack or answer a different question. "
+    "Sections may carry a page date and may disagree (older pages go stale); when they do, use the section from the "
+    "newest-dated page. Sections marked FACT are the site's resolved values: prefer them, and add detail the other "
+    "sections give about the same thing (for example which states or counties a charter area covers: when an answer mentions an area such as a charter or service area, also name the states, counties or cities the sections give for where Dupaco operates, instead of only linking a map). "
     "If the sections do not answer the question, reply with exactly: NONE"
 )
 # The model saying the sections lack the asked value, or ending with NONE after an explanation: not an answer.
@@ -226,7 +229,7 @@ _NONE_TOKEN = re.compile(r"(?:^|[.!?]\s+|\n\s*)NONE\.?\s*$")  # NONE as its own 
 MAX_SECTION_LINKS = 8
 
 
-def _section(h: Hit, links: Optional[dict], question: str = "") -> str:
+def _section(h: Hit, links: Optional[dict], question: str = "", date: Optional[str] = None) -> str:
     """One section for the prose prompt: page URL and heading, text, then targets of links whose text it shows as
     whole words. Nav links come first in page order, so candidates rank by anchor overlap with the question
     (page order breaks ties) before the cap."""
@@ -236,7 +239,7 @@ def _section(h: Hit, links: Optional[dict], question: str = "") -> str:
              if re.search(r"(?<!\w)" + re.escape(t) + r"(?!\w)", flat)]
     cands.sort(key=lambda c: (-len(qw & _words(c[1])), c[0]))
     shown = [f"{t}: {href}" for _, t, href in cands[:MAX_SECTION_LINKS]]
-    head = f"[{h.url}" + (f" | {h.heading_path}]" if h.heading_path else "]")
+    head = f"[{h.url}" + (f" | {h.heading_path}" if h.heading_path else "") + (f" | dated {date}" if date else "") + "]"
     return head + "\n" + h.text + ("\nLinks: " + "; ".join(shown) if shown else "")
 
 
@@ -296,22 +299,32 @@ def _name_in_sections(intent: Intent, hits: list[Hit]) -> bool:
 
 @tracing.traced("kb.render_prose", "chain")
 def render_prose(question: str, intent: Intent, hits: list[Hit], snapshot_id: str, llm: LLM,
-                 links: Optional[dict[str, list[tuple[str, str]]]] = None) -> Answer:
-    """`links`: page url -> (link text, target) pairs of that page (Store.links)."""
-    top = hits[0]
-    if not _name_in_sections(intent, hits[:4]):
+                 links: Optional[dict[str, list[tuple[str, str]]]] = None,
+                 dates: Optional[dict[str, Optional[str]]] = None, facts: Optional[list[ResolvedFact]] = None, limit: int = 4) -> Answer:
+    """`links`: page url -> (link text, target) pairs of that page (Store.links). `dates`: page url -> page date.
+    `facts`: resolved facts on the asked subject, shown to the writer as FACT sections ahead of the retrieved ones."""
+    top = hits[0] if hits else None
+    if top is None and not facts:
+        return refusal(question)
+    if hits and not _name_in_sections(intent, hits[:4]):
         return refusal(question)  # "Sapphire Money Market": the named account appears in none of the sections
-    sections = "\n\n".join(_section(h, links, question) for h in hits[:4])
+    parts = [f"FACT [{f.winner.url} | dated {f.winner.page_date or 'unknown'}]\n{f.winner.quote or f.value}"
+             for f in (facts or [])]
+    parts += [_section(h, links, question, (dates or {}).get(h.url)) for h in hits[:limit]]
+    sections = "\n\n".join(parts)
     out = llm.text(SONNET, _PROSE_SYSTEM, f"Question: {question}\n\nSections:\n{sections}", max_tokens=1024)
     if out is not None and (out.strip().rstrip(".").upper() == "NONE" or _NONE_TOKEN.search(out)
                             or _DISCLAIMER.search(_sentences(out.strip())[0] if out.strip() else "")):
         return refusal(question)  # the sections don't answer it
     text = _clean_prose(out) if out else ""
-    if not text:  # LLM failure (None) or nothing usable left: extract from the top section
+    if not text and top is not None:  # LLM failure (None) or nothing usable left: extract from the top section
         text = _extractive(question, _strip_prefix(top.text, top.heading_path))
-        if not text:
-            return refusal(question)
-    return Answer(text=text, sources=[Source(top.url, snapshot_id, top.text[:200])])
+    if not text:
+        return refusal(question)
+    srcs = [Source(f.winner.url, snapshot_id, (f.winner.quote or f.value)[:200]) for f in (facts or [])[:1]]
+    if top is not None:
+        srcs.append(Source(top.url, snapshot_id, top.text[:200]))
+    return Answer(text=text, sources=srcs)
 
 
 @tracing.traced("kb.refusal", "tool", tags=["guardrail"])

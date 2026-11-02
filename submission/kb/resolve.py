@@ -32,6 +32,9 @@ def _promo_end(quote: str) -> Optional[str]:
     return None
 
 
+_NARRATIVE = ('news', 'blog')
+
+
 def _dropped(o: FactObs) -> bool:
     """Step 5 candidates: news/press pages, and promos whose stated end date precedes the snapshot date."""
     if o.page_type == "news":
@@ -48,15 +51,18 @@ def _values(obs: list[FactObs]) -> set[str]:
 
 def _pick(key: str, live: list[FactObs], first_seen: dict[str, str]) -> ResolvedFact:
     cands = live
+    # Dated narrative pages only (news + blog): the value is "as of" the page's date, so they are one class of
+    # evidence and the newest date decides; a blog's higher authority must not let an older page beat a newer release.
+    narrative = all(o.page_type in _NARRATIVE for o in cands)
     # (5) drop expired promos and news when any non-news observation exists.
     kept = [o for o in cands if not _dropped(o)]
-    if kept and len(kept) < len(cands) and any(o.page_type != "news" for o in cands):
+    if not narrative and kept and len(kept) < len(cands) and any(o.page_type != "news" for o in cands):
         cands = kept
     else:
         kept = cands
     # Steps 2-4 narrow the candidate set; the step at which disagreement disappears names the rule.
     stages = (
-        ("authority", lambda o: o.authority),
+        ("authority", (lambda o: 0) if narrative else (lambda o: o.authority)),
         ("newer page date", lambda o: o.page_date or ""),
         # (4) "later snapshot of first observation": the snapshot where this observation's value first appeared
         # for the key (earliest taken_on over all snapshots up to this one); prefer the newer value.
@@ -343,3 +349,26 @@ def stale_values(store: Store, selected: list[ResolvedFact]) -> set[str]:
     for key in {r.fact_key for r in selected}:
         seen |= {o.value_norm for o in store.facts(fact_key=key)}
     return seen - keep
+
+
+_SUBJECT_QUALS = ("name", "what")
+_STEM_LEN = 5
+
+
+def _stems(text: str) -> set[str]:
+    return {w[:_STEM_LEN] for w in re.findall(r"[a-z]{3,}", text.lower())}
+
+
+def subject_split(intent: Intent, sel: list[ResolvedFact]) -> Optional[list[ResolvedFact]]:
+    """For an org/program fact question that names no subject (no `name`/`what` qualifier) yet matched facts about
+    several subjects (membership eligibility, insurance eligibility, a disclaimer), return the facts whose subject
+    words appear in the question (possibly none). None means the selection is not ambiguous."""
+    if intent.family == "list" or intent.product not in ("org", "program") or intent.qualifiers.get("name") \
+            or intent.qualifiers.get("what"):
+        return None
+    subjects = {tuple(parse_key(r.fact_key)[2].get(k, "") for k in _SUBJECT_QUALS) for r in sel}
+    if len(subjects) < 2:
+        return None
+    qs = _stems(intent.cleaned_question or "")
+    return [r for r in sel if qs & _stems(" ".join(parse_key(r.fact_key)[2].get(k, "").replace("-", " ")
+                                                  for k in _SUBJECT_QUALS))]

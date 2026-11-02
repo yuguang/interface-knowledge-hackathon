@@ -275,8 +275,8 @@ def _evergreen(ctx: PageContext) -> bool:
 
 
 def _counts(em: _Emitter, lines: list[str], sentences: list[str]) -> None:
-    if not _evergreen(em.ctx):
-        return
+    # News/blog boilerplate ("It has ... 22 branch office locations") is often the only place a count is stated.
+    # It is kept (with the page's date) so the resolver's newest-date rule picks the current count over old releases.
     for s in sentences:
         m = _COUNT.search(s)
         if not m or re.search(r"leaders|Home Savings|acqui", s, re.I):
