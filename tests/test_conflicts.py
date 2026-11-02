@@ -230,3 +230,31 @@ def test_purchase_and_refinance_nest_into_one():
                          ResolvedFact(r, "6.75%", ob(r, "6.75%", S5), [], "single source")])
     (c,) = build_conflicts(st, reg)
     assert c.topic == "15-year personal fixed mortgage rate" and c.values == ["5.625%", "6.75%"]
+
+
+def test_prose_count_compared_without_year_tokens():
+    """Different ordinals in the same year still disagree; a shared year is not a shared figure."""
+    st, reg = setup()
+    k = make_key("org", "award", {"name": "ranking"})
+    st.add_facts([ob(k, "It was the fourth time in 2023 that Forbes ranked Dupaco.", S1, url="https://d.org/a"),
+                  ob(k, "It was the fifth time in 2023 that Forbes ranked Dupaco.", S5, url="https://d.org/b")])
+    (c,) = build_conflicts(st, reg)
+    assert len(c.values) == 2
+    k2 = make_key("program", "count", {"name": "s"})
+    st.add_facts([ob(k2, "22 branch locations in 2023", S1, url="https://d.org/a"),
+                  ob(k2, "22 branch locations in 2024", S5, url="https://d.org/b")])
+    assert [x.topic for x in build_conflicts(st, reg)] == [c.topic]
+
+
+def test_emitted_conflict_lists_every_distinct_value():
+    """Filters decide whether to emit; an emitted conflict still lists every value seen (§9.5),
+    including a co-occurring table row and a single LLM observation."""
+    st, reg = setup()
+    k = make_key("credit_card", "apr", {"name": "platinum-visa"})
+    st.add_facts([ob(k, "12.50% - 19.50%", S1), ob(k, "15.50%", S1),
+                  ob(k, "13.00% - 20.00%", S1, url="https://d.org/cards", ptype="product", auth=80),
+                  ob(k, "14.00%", S2, url="https://d.org/blog", ptype="blog", auth=15, ex="llm:v1"),
+                  ob(k, "12.50% - 19.50%", S5)])
+    (c,) = build_conflicts(st, reg)
+    assert sorted(c.values) == ["12.50% - 19.50%", "13.00% - 20.00%", "14.00%", "15.50%"]
+    assert len(c.sources) == 4

@@ -101,10 +101,16 @@ _NUM_WORDS = ("one two three four five six seven eight nine ten eleven twelve th
 _CLAIM_RE = re.compile(r"\$?\d[\d,]*(?:\.\d+)?\s*[kKmM]?\b|\b(?:" + "|".join(_NUM_WORDS) + r")\b", re.I)
 
 
+_YEAR_RE = re.compile(r"\b(?:19|20)\d\d(?:\s*[-\u2013/]\s*(?:19|20)?\d\d)?\b")
+
+
 def _claim(value: str) -> frozenset[str]:
-    """The figures a prose value states ("twenty renewable scholarships" -> {"twenty"}), for comparison."""
+    """The figures a prose value states ("twenty renewable scholarships" -> {"twenty"}), for comparison.
+
+    Years are dates, not figures: they are removed first, so "fourth time in 2023" vs "fifth time in
+    2023" still differ and "twenty scholarships" vs "twenty scholarships for 2026-2027" still agree."""
     out = set()
-    for tok in _CLAIM_RE.findall(value or ""):
+    for tok in _CLAIM_RE.findall(_YEAR_RE.sub(" ", value or "")):
         t = tok.lower().replace("$", "").replace(",", "").replace(" ", "")
         out.add(t)
     return frozenset(out)
@@ -310,17 +316,15 @@ def build_conflicts_detailed(store: Store, registry: SnapshotRegistry) -> list[t
         by_value: dict[str, list[FactObs]] = {}
         for o in obs:  # ordered by (year,) taken_on: dict keeps first-seen order
             by_value.setdefault(o.value_norm, []).append(o)
-        by_value = _trusted(by_value)
-        values = _disputed_values(attr, by_value)
-        if len(values) < 2:
+        # the filters only decide whether to emit; an emitted conflict lists every distinct value (§9.5)
+        if len(_disputed_values(attr, _trusted(by_value))) < 2:
             continue
+        values = list(by_value)
         rkey, rsid, rf = _pick_resolution(resolver, ids, members)
         if rf is not None:
             resolution = rf.value
         else:
             rkey, resolution = obs[-1].fact_key, obs[-1].value_norm
-        if resolution in by_value and resolution not in values:
-            values.append(resolution)
         reason = None
         if rf is not None and rsid == latest and any(l.value_norm != rf.value for l in rf.losers):
             reason = rf.rule
