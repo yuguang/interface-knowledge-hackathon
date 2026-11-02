@@ -159,6 +159,40 @@ def test_award_and_eligibility():
     assert parse("Who is eligible to become a Dupaco member?").attribute == "eligibility"
 
 
+@pytest.mark.parametrize("q,name", [
+    ("What is the APR on the Dupaco Platinum Elite Visa card?", "platinum-elite-visa"),
+    ("What APR does the Dupaco Galaxy Rewards Mastercard charge?", "galaxy-rewards-mastercard"),
+    ("What APY does the Dupaco Sapphire Money Market account pay?", "sapphire"),
+    ("What is the APY on Moonshot Teen Checking?", "moonshot-teen"),
+    ("What dividend rate does Dupaco's gold IRA pay?", "gold"),
+    ("What APY does Titanium Business Checking earn?", "titanium"),
+    ("What APY does Launchpad Savings pay?", "launchpad"),
+    ("What APY does the Achieve Money Market pay?", "achieve"),
+    ("What is the APR on the Business Platinum Visa?", "platinum-visa"),
+    ("What APR does the Visa Platinum card have?", "platinum-visa"),
+    ("What is the highest Share Savings APY?", None),
+    ("What is the APY on 1st Rate Checking?", None),
+    ("What are business checking rates?", None),
+    ("What is the APY on Dupaco's regular 12-month certificate?", None),
+])
+def test_named_account_qualifier(q, name):
+    """Words naming a specific account before its noun become `name`, so a fabricated account never matches a real
+    one's facts (refusal fixture); descriptive words (business, highest, regular, 1st Rate) do not."""
+    assert parse(q).qualifiers.get("name") == name
+
+
+def test_paraphrase_pairs_parse_alike():
+    """Paraphrase-fixture groups that split (dup-087, dup-102, dup-008, dup-049, dup-060)."""
+    a, b = parse("What recognition has Dupaco received from Forbes?"), parse("How many times has Forbes recognized Dupaco?")
+    assert a.qualifiers == b.qualifiers == {"name": "forbes"}
+    i = parse("What are the lobby hours at Dupaco's Mullan Avenue location?")
+    assert (i.attribute, i.qualifiers) == ("hours_lobby", {"name": "mullan-avenue"})
+    assert parse("Where on Dupaco's website can I look up certificate (CD) rates?").canonical == \
+        parse("What link should I use to see Dupaco's CD / certificate rates?").canonical
+    assert parse("Does any Share Savings balance tier earn 0.35% APY?").family == "list"
+    assert parse("How do I change the address or phone number Dupaco has on file for me?").family == "prose"
+
+
 def test_names_are_hyphen_slugs():
     assert parse("When does the Hy-Vee branch close?").qualifiers["name"] == "hy-vee"
     assert parse("lobby hours for the Mullan Avenue branch").qualifiers["name"] == "mullan-avenue"
