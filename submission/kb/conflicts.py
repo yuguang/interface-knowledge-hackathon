@@ -101,19 +101,40 @@ _NUM_WORDS = ("one two three four five six seven eight nine ten eleven twelve th
 _CLAIM_RE = re.compile(r"\$?\d[\d,]*(?:\.\d+)?\s*[kKmM]?\b|\b(?:" + "|".join(_NUM_WORDS) + r")\b", re.I)
 
 
-_YEAR_RE = re.compile(r"\b(?:19|20)\d\d(?:\s*[-\u2013/]\s*(?:19|20)?\d\d)?\b")
+# Years only in a date context, never a money amount or a count ("$2000", "2000 members"):
+# - a year range: "2026-2027", "2024/25", "2024-25" (the end year 1-5 years after the start);
+# - a year after a temporal word: "in 2023", "for 2024", "since 1990", "as of 2025", "fiscal 2024",
+#   unless a plural noun follows ("for 2000 members").
+_YEAR_SPAN_RE = re.compile(r"(?<![\$\d,.])\b((?:19|20)\d\d)\s*[-–/]\s*((?:19|20)?\d\d)\b(?!\s*%)")
+_YEAR_CTX_RE = re.compile(
+    r"\b(in|for|since|during|until|through|from|by|as of|fiscal|academic|calendar|year|class of)\s+"
+    r"((?:19|20)\d\d)\b(?![,.]\d|\s*%)(?!\s+(?!(?:was|has|is|as|this|its|thus|always)\b)[a-z]+s\b)", re.I)
+
+
+def _strip_years(text: str) -> str:
+    def span(m: re.Match) -> str:
+        start, end = int(m.group(1)), m.group(2)
+        end_y = int(end) if len(end) == 4 else start // 100 * 100 + int(end)
+        return " " if 1 <= end_y - start <= 5 else m.group(0)
+
+    text = _YEAR_SPAN_RE.sub(span, text)
+    return _YEAR_CTX_RE.sub(lambda m: m.group(1) + " ", text)
+
+
+def _figures(text: str) -> frozenset[str]:
+    return frozenset(tok.lower().replace("$", "").replace(",", "").replace(" ", "")
+                     for tok in _CLAIM_RE.findall(text))
 
 
 def _claim(value: str) -> frozenset[str]:
     """The figures a prose value states ("twenty renewable scholarships" -> {"twenty"}), for comparison.
 
-    Years are dates, not figures: they are removed first, so "fourth time in 2023" vs "fifth time in
-    2023" still differ and "twenty scholarships" vs "twenty scholarships for 2026-2027" still agree."""
-    out = set()
-    for tok in _CLAIM_RE.findall(_YEAR_RE.sub(" ", value or "")):
-        t = tok.lower().replace("$", "").replace(",", "").replace(" ", "")
-        out.add(t)
-    return frozenset(out)
+    Dates are not figures: years in a date context are removed first, so "fourth time in 2023" vs "fifth
+    time in 2023" differ and "twenty scholarships" vs "twenty scholarships for 2026-2027" agree. Money
+    and counts in 1900-2099 ("$2000", "2000 members") stay figures. A value whose only figures are
+    dates keeps them, so "awarded in 2023" vs "awarded in 2024" still compare."""
+    value = value or ""
+    return _figures(_strip_years(value)) or _figures(value)
 
 
 def _trusted(by_value: dict[str, list[FactObs]]) -> dict[str, list[FactObs]]:

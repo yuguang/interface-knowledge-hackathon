@@ -232,18 +232,33 @@ def test_purchase_and_refinance_nest_into_one():
     assert c.topic == "15-year personal fixed mortgage rate" and c.values == ["5.625%", "6.75%"]
 
 
-def test_prose_count_compared_without_year_tokens():
-    """Different ordinals in the same year still disagree; a shared year is not a shared figure."""
+def _prose_conflicts(a: str, b: str, attr: str = "count") -> int:
     st, reg = setup()
-    k = make_key("org", "award", {"name": "ranking"})
-    st.add_facts([ob(k, "It was the fourth time in 2023 that Forbes ranked Dupaco.", S1, url="https://d.org/a"),
-                  ob(k, "It was the fifth time in 2023 that Forbes ranked Dupaco.", S5, url="https://d.org/b")])
-    (c,) = build_conflicts(st, reg)
-    assert len(c.values) == 2
-    k2 = make_key("program", "count", {"name": "s"})
-    st.add_facts([ob(k2, "22 branch locations in 2023", S1, url="https://d.org/a"),
-                  ob(k2, "22 branch locations in 2024", S5, url="https://d.org/b")])
-    assert [x.topic for x in build_conflicts(st, reg)] == [c.topic]
+    k = make_key("program", attr, {"name": "x"})
+    st.add_facts([ob(k, a, S1, url="https://d.org/a"), ob(k, b, S5, url="https://d.org/b")])
+    return len(build_conflicts(st, reg))
+
+
+def test_prose_count_compared_without_year_tokens():
+    """A shared date year is not a shared figure: different ordinals or counts in the same year
+    disagree (with years kept as figures, the common "2023" would hide the change)."""
+    assert _prose_conflicts("It was the fourth time in 2023 that Forbes ranked Dupaco.",
+                            "It was the fifth time in 2023 that Forbes ranked Dupaco.", "award") == 1
+    assert _prose_conflicts("22 branch locations in 2023", "24 branch locations in 2023") == 1
+    assert _prose_conflicts("20 scholarships for the 2026-2027 academic year",
+                            "25 scholarships for the 2026-2027 academic year") == 1
+    # same figure, different date years: no change in the figure
+    assert _prose_conflicts("22 branch locations in 2023", "22 branch locations in 2024") == 0
+
+
+def test_prose_money_and_counts_in_year_range_stay_figures():
+    """Only years in a date context are stripped: amounts and counts between 1900 and 2099 are figures."""
+    assert _prose_conflicts("2000 members", "1500 members") == 1
+    assert _prose_conflicts("$2000 bonus", "$1500 bonus", "award") == 1
+    assert _prose_conflicts("a bonus for 2000 members", "a bonus for 1500 members") == 1
+    assert _prose_conflicts("$2,000 bonus", "$2000 bonus", "award") == 0
+    # a value whose only figures are dates keeps them
+    assert _prose_conflicts("grant awarded in 2023", "grant awarded in 2024", "award") == 1
 
 
 def test_emitted_conflict_lists_every_distinct_value():
