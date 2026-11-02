@@ -13,7 +13,7 @@ from typing import Optional
 
 from contract import Answer, Conflict, Snapshot, Source
 
-from . import classify, compose, conflicts as conflicts_mod, intent, normalize, resolve
+from . import classify, compose, conflicts as conflicts_mod, intent, normalize, resolve, tracing
 from .extract import llm_facts, regex, tables
 from .llm import LLM
 from .model import AUTHORITY, Chunk, Intent, PageContext, PageInfo, chunk_hash
@@ -53,8 +53,13 @@ class KnowledgeSystem:
 
     def _fail(self, stage: str, context: str) -> None:
         self.stage_errors[stage] += 1
+        tracing.annotate(**{f"failed_{stage}": True})
+        tracing.mark_failed(f"stage {stage} failed ({context[:80]})")
         log.error("stage %s failed (%s)\n%s", stage, context, traceback.format_exc())
 
+    @tracing.traced("kb.ingest", "chain", inputs=lambda d: {
+        "snapshot_id": d["snapshot"].snapshot_id, "taken_on": d["snapshot"].taken_on,
+        "n_pages": len(d["snapshot"].pages)})
     def ingest(self, snapshot: Snapshot) -> None:
         """Fail-soft per stage (R14): the harness does not guard ingest, so one bad page never aborts it."""
         sid = snapshot.snapshot_id
@@ -65,9 +70,12 @@ class KnowledgeSystem:
         except Exception:
             self._fail("fit_boilerplate", sid)
             bp = frozenset()
-        for page in sorted(snapshot.pages, key=lambda p: p.url):
+        pages = sorted(snapshot.pages, key=lambda p: p.url)
+        for i, page in enumerate(pages, 1):
             try:
-                self._ingest_page(sid, snapshot.taken_on, page, bp)
+                with tracing.span("kb.ingest_page", "chain", inputs={"snapshot_id": sid, "url": page.url},
+                                  metadata={"step_number": i, "total_steps": len(pages)}) as run:
+                    run.end(outputs={"facts": self._ingest_page(sid, snapshot.taken_on, page, bp)})
             except Exception:  # last resort: a store-level failure on one page skips only that page
                 self._fail("page", page.url)
         try:
@@ -82,7 +90,8 @@ class KnowledgeSystem:
             self._fail("index_snapshot", sid)
         self._conflicts = None
 
-    def _ingest_page(self, sid: str, taken_on: str, page, bp: frozenset) -> None:
+    def _ingest_page(self, sid: str, taken_on: str, page, bp: frozenset) -> dict:
+        """Returns the number of facts each extractor produced (logged on the trace)."""
         try:
             info = classify.classify_page(page.url, page.title, page.markdown, taken_on)
         except Exception:
@@ -106,13 +115,18 @@ class KnowledgeSystem:
         stored = self.store.add_chunks(sid, page_id, chunks)
         ctx = PageContext(sid, taken_on, page.url, page.title, info, md, stored)
         obs = []
+        counts: dict = {"chunks": len(chunks)}
         for name, fn in (("tables", lambda: tables.extract(ctx)), ("regex", lambda: regex.extract(ctx)),
                          ("llm_facts", lambda: llm_facts.extract(ctx, self.llm))):
             try:
-                obs += fn()
+                got = fn()
+                counts[name] = len(got)
+                obs += got
             except Exception:  # one failing extractor must not abort ingest or drop the others' facts
                 self._fail(name, page.url)
+                counts[name] = "failed"
         self.store.add_facts(obs)
+        return counts
 
     def _refusal(self, question: str) -> Answer:
         try:
@@ -121,6 +135,7 @@ class KnowledgeSystem:
             self._fail("refusal", question[:80])
             return Answer(text=_REFUSAL_TEXT, confident=False)
 
+    @tracing.traced("kb.answer", "chain", tags=["answer"])
     def answer(self, question: str, as_of: Optional[str] = None) -> Answer:
         try:
             return self._answer(question, as_of)
@@ -133,14 +148,18 @@ class KnowledgeSystem:
         q80 = question[:80]
         degraded = False
         sid = self.registry.resolve(effective_as_of(question, as_of))
+        tracing.annotate(snapshot_id=sid, as_of=as_of)
         try:
             it = intent.parse(question, self.llm)
         except Exception:
             self._fail("intent", q80)
             degraded = True
             it = Intent("prose", None, None, {}, None, question, question.lower().strip())
+        tracing.annotate(intent_family=it.family, product=it.product, attribute=it.attribute,
+                         canonical=it.canonical)
         memo = self.store.memo_get(it.canonical, sid)
         if memo is not None:
+            tracing.annotate(path="memo", degraded=degraded)
             return _answer_from_dict(memo)
         sel, cands = [], []
         if it.product:
@@ -185,6 +204,8 @@ class KnowledgeSystem:
             degraded = True
             if drop:
                 ans = self._refusal(question)
+        tracing.annotate(path="facts" if from_facts else ("refusal" if not ans.confident else "retrieval"),
+                         degraded=degraded, n_selected_facts=len(sel), confident=ans.confident)
         if not degraded:
             self.store.memo_put(it.canonical, sid, asdict(ans))
         return ans

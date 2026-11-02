@@ -37,6 +37,11 @@ Run every command from the repository root.
    ```
    Without a key, or with `KB_NO_LLM=1`, the system runs in a rules-only fallback mode at lower
    accuracy. See `submission/NOTES.md`.
+5. **LangSmith tracing (optional).** Set the variables in `.env.example` (`LANGSMITH_TRACING=true`,
+   `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`, optional `KB_ENV`). Without them tracing is a no-op. Each
+   `answer()` becomes a trace: intent parsing, fact selection, hybrid search, section picking, rendering, the
+   stale-value guardrail, and every Claude call (via `wrap_anthropic`). Ingest is traced per snapshot and per
+   page. Code is in `submission/kb/tracing.py`.
 
 ## Run
 

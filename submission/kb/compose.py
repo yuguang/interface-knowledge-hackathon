@@ -7,6 +7,7 @@ from typing import Optional
 from contract import Answer, Source
 from scoring import _numbers
 
+from . import tracing
 from .keys import parse_key
 from .llm import SONNET, LLM
 from .model import Hit, Intent, ResolvedFact
@@ -192,6 +193,7 @@ def _lines(selected: list[ResolvedFact]) -> list[str]:
     return out
 
 
+@tracing.traced("kb.render_facts", "tool")
 def render_facts(question: str, intent: Intent, selected: list[ResolvedFact], snapshot_id: str) -> Answer:
     text = "\n".join(_lines(selected))
     sources, seen = [], set()
@@ -292,6 +294,7 @@ def _name_in_sections(intent: Intent, hits: list[Hit]) -> bool:
     return want <= have
 
 
+@tracing.traced("kb.render_prose", "chain")
 def render_prose(question: str, intent: Intent, hits: list[Hit], snapshot_id: str, llm: LLM,
                  links: Optional[dict[str, list[tuple[str, str]]]] = None) -> Answer:
     """`links`: page url -> (link text, target) pairs of that page (Store.links)."""
@@ -311,10 +314,12 @@ def render_prose(question: str, intent: Intent, hits: list[Hit], snapshot_id: st
     return Answer(text=text, sources=[Source(top.url, snapshot_id, top.text[:200])])
 
 
+@tracing.traced("kb.refusal", "tool", tags=["guardrail"])
 def refusal(question: str) -> Answer:
     return Answer(text=_REFUSAL, confident=False)
 
 
+@tracing.traced("kb.sanitize", "tool", tags=["guardrail"])
 def sanitize(answer: Answer, keep: set[str], drop: set[str]) -> Answer:
     keep_n = set().union(*(_numbers(k) for k in keep)) if keep else set()
     drop_n = set().union(*(_numbers(d) for d in drop)) if drop else set()

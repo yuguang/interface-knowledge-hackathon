@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from . import keys
+from . import keys, tracing
 from .llm import HAIKU, LLM
 from .model import Intent
 
@@ -269,6 +269,7 @@ def _llm_labels(question: str, llm: LLM) -> tuple[Optional[str], Optional[str]]:
     return None, None
 
 
+@tracing.traced("kb.intent", "chain", tags=["routing"])
 def parse(question: str, llm: Optional[LLM] = None) -> Intent:
     question = question if isinstance(question, str) else str(question)
     cleaned = _clean(question)

@@ -1,4 +1,5 @@
 anthropic==2.3.0
+langsmith==0.14.17
 haystack-ai==3.4.1
 chroma-haystack==5.0.0
 chromadb==1.5.9

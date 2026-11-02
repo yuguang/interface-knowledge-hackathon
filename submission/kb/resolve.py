@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import date
 from typing import Optional
 
+from . import tracing
 from .keys import band_contains, parse_key
 from .model import FactObs, Intent, ResolvedFact
 from .store import Store
@@ -261,6 +262,7 @@ def _order(s: tuple) -> tuple:
     return p, tuple(quals), 0 if a in ("apy", "apr") else 1, a
 
 
+@tracing.traced("kb.select_facts", "tool")
 def select_for_intent(intent: Intent, resolved: list[ResolvedFact]) -> list[ResolvedFact]:
     q = intent.qualifiers or {}
     parsed = [(r, parse_key(r.fact_key)) for r in resolved]
@@ -321,6 +323,7 @@ def select_for_intent(intent: Intent, resolved: list[ResolvedFact]) -> list[Reso
     return [s[0] for s in sel]
 
 
+@tracing.traced("kb.stale_values", "tool", tags=["guardrail"])
 def stale_values(store: Store, selected: list[ResolvedFact]) -> set[str]:
     keep = {r.value for r in selected}
     seen: set[str] = set()

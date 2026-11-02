@@ -11,6 +11,7 @@ os.environ.setdefault("HAYSTACK_TELEMETRY_ENABLED", "False")
 
 from ..llm import LLM
 from ..model import Hit
+from .. import tracing
 from ..store import Store
 from . import fts
 from .dense import DenseIndex
@@ -74,10 +75,12 @@ class Retriever:
             log.exception("dense indexing failed for %s; FTS only", snapshot_id)
             self.dense_ok = False
 
+    @tracing.traced("kb.search", "tool", tags=["retrieval"])
     def search(self, question: str, snapshot_id: str, k: int = 10) -> list[Hit]:
         if not fts.query_terms(question):  # only stopwords: nothing to look for
             return []
         n = max(k, CANDIDATES)
+        tracing.annotate(dense_ok=self.dense_ok)
         if self.dense_ok:
             try:
                 args = {"query": question, "snapshot_id": snapshot_id, "top_k": n}
@@ -90,10 +93,12 @@ class Retriever:
                 return fts.to_hits(self.store, scored, snapshot_id, k)
             except Exception:
                 log.exception("hybrid search failed; FTS only")
+                tracing.mark_failed("hybrid search failed; fell back to FTS only")
         # FTS only, scored as single-list RRF (Haystack's k=61, top = 1.0) so pick() treats it alike
         hits = fts.fts_search(self.store, question, snapshot_id, k)
         return [replace(h, score=RRF_K / (RRF_K + rank)) for rank, h in enumerate(hits)]
 
+    @tracing.traced("kb.pick", "chain", tags=["retrieval"])
     def pick(self, question: str, hits: list[Hit]) -> list[Hit]:
         ids = pick_sections(self.llm, question, hits)
         if ids is None:  # LLM unavailable: trust the top hit only when both retrievers ranked it first

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import collections
 import concurrent.futures as cf
+import contextvars
 import copy
 import hashlib
 import json
@@ -21,6 +22,8 @@ import sqlite3
 import threading
 from pathlib import Path
 from typing import Optional
+
+from . import tracing
 
 HAIKU = "claude-haiku-5-5"
 SONNET = "claude-sonnet-5-5"
@@ -89,11 +92,13 @@ class LLM:
     def _get_client(self):
         if self._client is None:
             import anthropic
-            self._client = anthropic.Anthropic(max_retries=0)
+            self._client = tracing.wrap_anthropic(anthropic.Anthropic(max_retries=0))
         return self._client
 
     def _record(self, reason: str, model: str, detail: str) -> None:
         self.failures[reason] += 1
+        tracing.annotate(llm_failure=reason)
+        tracing.mark_failed(f"llm {reason}: {detail}"[:300])
         log.warning("llm %s failed (%s): %s", model, reason, detail[:200])
 
     @staticmethod
@@ -109,7 +114,9 @@ class LLM:
         """Run messages.create with both the SDK timeout and a wall-clock guard; return the text output."""
         ex = cf.ThreadPoolExecutor(max_workers=1)
         try:
-            fut = ex.submit(lambda: self._get_client().messages.create(timeout=timeout_s, **kw))
+            # copy_context: the worker thread must see the current trace span, or the llm run becomes a root
+            ctx = contextvars.copy_context()
+            fut = ex.submit(ctx.run, lambda: self._get_client().messages.create(timeout=timeout_s, **kw))
             try:
                 resp = fut.result(timeout=timeout_s + 0.2)
             except cf.TimeoutError:
@@ -125,15 +132,20 @@ class LLM:
             raise _Fail("truncated", f"stop_reason={stop}")
         return "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
 
+    @tracing.traced("kb.llm", "chain", inputs=lambda d: {k: d[k] for k in ("model", "system", "user", "schema")
+                                                         if k in d})
     def _run(self, model: str, system: str, user: str, max_tokens: int, timeout_s: float,
              schema: Optional[dict]):
         if not self.enabled:
+            tracing.annotate(llm_enabled=False)
             return None
         try:
             key = self._key(model, system, user, schema)
             hit = self._get(key)
             if hit:
+                tracing.annotate(cache_hit=True)
                 return hit[0]
+            tracing.annotate(cache_hit=False)
             out = self._call(timeout_s, **self._request(model, system, user, max_tokens, schema))
             if schema is not None:
                 try:
