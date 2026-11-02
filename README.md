@@ -92,3 +92,80 @@ current code:
 - warm ingest under 120 s (see above);
 - p95 of 1.5 s or less (currently 3.11 s). `dev/clean_env_check.sh --preflight`
 runs only the cheap part: prerequisites, clone, zip copy and the harness's auto-unpack.
+
+## Agentic workflow
+
+```mermaid
+flowchart TD
+  subgraph INGEST["ingest(snapshot): offline, once per snapshot, oldest first"]
+    direction TB
+    S[/"Snapshot pages"/] --> BP["Fit boilerplate<br/>lines on 20%+ of pages"]
+    BP --> CL["Classify page<br/>page type, authority, page date"]
+    CL --> CN["Clean and chunk<br/>split at headings, tables kept whole"]
+    CN --> DD["Dedup chunks<br/>hash of URL + text, record snapshot membership"]
+    DD --> EX{{"Extract facts"}}
+    EX --> TBL["Rate-table parser"]
+    EX --> RX["Regex extractors<br/>hours, addresses, routing no., counts, dates"]
+    EX --> LF["Prose facts<br/>Haiku, committed cache"]
+    TBL --> FO[("fact_obs<br/>one row per fact, page and snapshot")]
+    RX --> FO
+    LF --> FO
+    TBL --> XC["Cross-check rate rows<br/>Haiku re-reads each row"]
+    FO --> RS["Resolve each fact key<br/>authority policy: qualifiers, page type,<br/>page date, recency, expiry"]
+    RS --> FR[("fact_resolved<br/>winner per key per snapshot")]
+    RS -->|"rules weak"| CJ["Conflict judge<br/>Sonnet, cached verdicts"]
+    XC -->|"readings disagree"| CJ
+    CJ --> FR
+    DD --> IX[("Search indexes<br/>FTS5 + Chroma, new chunks only")]
+  end
+
+  subgraph ANSWER["answer(question, as_of): online, target p95 under 2 s"]
+    direction TB
+    Q[/"question, as_of"/] --> SID["Pick snapshot<br/>as_of argument, else date in question, else latest"]
+    SID --> IP["Parse intent<br/>rules + synonyms, Haiku fallback"]
+    IP --> MC{"Memo hit?<br/>canonical intent + snapshot"}
+    MC -->|"no"| SEL{"Resolved fact<br/>for this intent?"}
+    SEL -->|"yes"| TPL["Template answer<br/>winning values only, site formatting"]
+    SEL -->|"no"| SR["Hybrid search in that snapshot<br/>FTS5 + Chroma, rank fusion, top 10"]
+    SR --> PK{"Section picker (Haiku)<br/>does a section state the value?"}
+    PK -->|"yes"| CP["Compose prose<br/>Sonnet, extractive fallback"]
+    PK -->|"no"| REF["Refusal<br/>confident=False, no digits"]
+    CP --> AC["Answer checker (Haiku)<br/>remove claims or refuse, never add"]
+    AC -->|"refuse"| REF
+    AC --> SAN["Sanitize<br/>drop stale values and 'facts/context' wording"]
+    TPL --> SAN
+    REF --> SAN
+    SAN --> MP["Save to memo<br/>skipped if any stage degraded"]
+    MP --> OUT[/"Answer<br/>text, sources, confident, conflict_note"/]
+    MC -->|"yes"| OUT
+  end
+
+  subgraph CONFLICTS["conflicts(): built once, cached"]
+    direction TB
+    CB["One Conflict per fact key<br/>2+ distinct values across snapshots"] --> PF["Precision filter<br/>drop tier/term look-alikes and<br/>judge 'different qualifiers' verdicts"]
+    PF --> CO[/"Conflicts<br/>values, resolution = snapshot 05 winner, reason"/]
+  end
+
+  FR -.-> SEL
+  IX -.-> SR
+  FR -.-> CB
+  FO -.-> CB
+
+  classDef llm fill:#ede7f6,stroke:#5e35b1,color:#1a1a1a
+  classDef planned fill:#fff8e1,stroke:#f9a825,stroke-dasharray:5 5,color:#1a1a1a
+  classDef store fill:#e3f2fd,stroke:#1565c0,color:#1a1a1a
+  classDef refuse fill:#ffebee,stroke:#c62828,color:#1a1a1a
+  class LF,IP,PK,CP llm
+  class XC,CJ,AC planned
+  class FO,FR,IX store
+  class REF refuse
+```
+
+### How to read the diagram
+- **Purple:** steps that call an LLM. Every call goes through `kb/llm.py`, which caches results and returns `None` on failure. The step then falls back to its rule-based or extractive path instead of crashing.
+- **Dashed amber:** the conflict judge, the rate-table cross-check and the answer checker. They are in `PROJECT_PLAN.md` (see `IMPROVEMENTS.md` §4.1–4.3) but not yet in the implementation plan or the code. The answer checker is kept only if it fixes more answers than it breaks.
+- **Blue:** SQLite tables and search indexes, rebuilt at each run. Only the LLM caches (extracted facts and judge verdicts) are committed. Snapshot text never enters git.
+- **Red:** the refusal. The scorer gives credit only if the answer has `confident=False` and adds no number that isn't in the question.
+- **Dotted arrows:** reads from the stores built at ingest.
+- **Refusal rule** (implementation plan, Task 1.3): refuse when no resolved fact matches the intent **and** the section picker finds no section that states the value. A retrieval score never triggers a refusal on its own.
+- **Fail-soft:** every stage in `ingest` and `answer` catches its own errors and degrades. Degraded answers are not saved to the memo.
