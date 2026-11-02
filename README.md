@@ -53,7 +53,7 @@ What to expect on the first run from a fresh clone:
 - The harness unpacks the zips. Chroma downloads its ONNX embedding model (all-MiniLM-L6-v2, about
   80 MB) into `~/.cache/chroma/` if this machine doesn't have it yet.
 - Ingest makes Claude Haiku calls for prose facts, capped at 300 s of LLM time per snapshot.
-- Cold ingest time depends on Anthropic API latency.
+- Prose facts for the 231 in-scope chunks come from the committed `submission/data/facts_cache.jsonl`; only chunks missing from it call the API.
 - In our last local scored run, ingest took 387.6 s. That figure is from a local run's `results/`
   report, which is not committed. A cold fresh clone has not been timed yet. The harness's 30-minute
   ingest limit is a hard cap.
@@ -73,7 +73,7 @@ Latest local scores (`dev/scores.csv`, public eval with `--judge`):
 
 | Path | What |
 |---|---|
-| `submission/` | The solution: `solution.py`, `kb/` package, `requirements.txt`, `NOTES.md`, `data/facts_cache.jsonl` (LLM-extraction cache, **currently empty; build deferred**, so prose facts are extracted live at ingest). |
+| `submission/` | The solution: `solution.py`, `kb/` package, `requirements.txt`, `NOTES.md`, `data/facts_cache.jsonl` (committed LLM-extraction cache: 231 chunks, derived values only, built with `dev/build_facts_cache.py`). |
 | `harness/`, `eval/`, `starter/` | The organizers' kit (unchanged). |
 | `tests/` | Unit and integration tests (after setup, `pip install -r requirements-dev.txt`, then `pytest`). |
 | `dev/` | Dev fixtures (paraphrase, as_of, refusal sets; conflicts gold), `score_run.sh`, `clean_env_check.sh`, `scores.csv`. |

@@ -17,9 +17,10 @@ to the refusal text instead of raising.
    - Claude Haiku 5.5 for prose facts on in-scope chunks (eligibility, programs, awards, mobile
      wallets, ...). Lookups go to `submission/data/facts_cache.jsonl` first, then to the API. The LLM
      time is capped at 300 s per snapshot; once the cap is spent, remaining uncached chunks are skipped.
-     Answers are cached in `submission/.cache/llm.sqlite`. The committed `facts_cache.jsonl` is
-     currently empty (the build was deferred), so a fresh clone calls the API for these facts at
-     ingest. Cold ingest time therefore depends on API latency, up to the 300 s/snapshot cap.
+     Answers are cached in `submission/.cache/llm.sqlite`. The committed `facts_cache.jsonl` holds 231 chunks (940 prose facts, built with
+     `dev/build_facts_cache.py`), keyed by chunk hash, so a fresh clone makes no Haiku calls for chunks
+     it covers. Only chunks missing from it (e.g. if the cleaning or chunking code changes) go to the API,
+     up to the 300 s/snapshot cap.
 4. Resolve every fact key in the snapshot with the authority policy below, and store the winner per
    snapshot.
 5. Index the snapshot's chunks for keyword search (SQLite FTS5; `rank_bm25` when the SQLite build lacks
