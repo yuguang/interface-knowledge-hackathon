@@ -247,6 +247,11 @@ def test_prose_count_compared_without_year_tokens():
     assert _prose_conflicts("22 branch locations in 2023", "24 branch locations in 2023") == 1
     assert _prose_conflicts("20 scholarships for the 2026-2027 academic year",
                             "25 scholarships for the 2026-2027 academic year") == 1
+    # years in ranges phrased in words, or after any preposition, are dates too
+    assert _prose_conflicts("5 branches from 2020 to 2024", "6 branches from 2020 to 2024") == 1
+    assert _prose_conflicts("5 branches between 2020 and 2024", "6 branches between 2020 and 2024") == 1
+    assert _prose_conflicts("5 branches of 2024", "6 branches of 2024") == 1
+    assert _prose_conflicts("20 scholarships for 2024/25", "25 scholarships for 2024/25") == 1
     # same figure, different date years: no change in the figure
     assert _prose_conflicts("22 branch locations in 2023", "22 branch locations in 2024") == 0
 
@@ -258,6 +263,7 @@ def test_prose_money_and_counts_in_year_range_stay_figures():
     assert _prose_conflicts("a bonus for 2000 members", "a bonus for 1500 members") == 1
     assert _prose_conflicts("$2,000 bonus", "$2000 bonus", "award") == 0
     # a value whose only figures are dates keeps them
+    assert _prose_conflicts("founded in 2001", "founded in 1999", "award") == 1
     assert _prose_conflicts("grant awarded in 2023", "grant awarded in 2024", "award") == 1
 
 
