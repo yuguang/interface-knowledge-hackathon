@@ -69,8 +69,8 @@ def test_branch_count():
 def test_address_and_phone():
     md = "**Address:** 123 Main St, Dubuque, IA 52001\n\n**Phone:** (563) 555-1234"
     obs = regex.extract(ctx(md))
-    assert get(obs, "branch|address|name=dubuque") == ["123 Main St, Dubuque, IA 52001"]
-    assert get(obs, "branch|phone|name=dubuque") == ["563-555-1234"]
+    assert get(obs, "branch|address|name=dubuque-main-st") == ["123 Main St, Dubuque, IA 52001"]
+    assert get(obs, "branch|phone|name=dubuque-main-st") == ["563-555-1234"]
 
 
 def test_po_box_not_address_org_phone():
@@ -95,7 +95,7 @@ def test_quote_bounded_and_no_chunks():
 def test_hours_and_address_share_branch_name():
     md = "Lobby\nMonday-Friday: 9 a.m.-5 p.m.\n\n**Address:** 123 Main St, Dubuque, IA 52001"
     obs = regex.extract(ctx(md))
-    assert {o.qualifiers["name"] for o in obs} == {"dubuque"}
+    assert {o.qualifiers["name"] for o in obs} == {"dubuque-main-st"}
 
 
 def test_award_keyed_by_year_and_news_counts_skipped():
@@ -145,7 +145,7 @@ def test_address_comma_before_zip_and_context():
           "### Galena Chrysler\n\n937 Galena Square Dr, Galena, IL, 61036")
     obs = regex.extract(ctx(md, url="https://www.dupaco.com/contact"))
     assert {o.fact_key: o.value_norm for o in obs if o.attribute == "address"} == {
-        "branch|address|name=galena": "11375 Oldenburg Ln., Galena, IL 61036"}
+        "branch|address|name=galena-oldenburg-ln": "11375 Oldenburg Ln., Galena, IL 61036"}
 
 
 @pytest.mark.real
@@ -156,6 +156,29 @@ def test_real_galena_address_snapshot_05():
     for p in snap.pages:
         info = classify.classify_page(p.url, p.title, p.markdown, snap.taken_on)
         for o in regex.extract(PageContext(snap.snapshot_id, snap.taken_on, p.url, p.title, info, p.markdown, [])):
-            if o.fact_key == "branch|address|name=galena":
+            if o.fact_key == "branch|address|name=galena-oldenburg-ln":
                 vals.add(o.value_norm)
     assert vals == {"11375 Oldenburg Ln., Galena, IL 61036"}
+
+
+# ---- Task 3.2a
+
+def test_four_dubuque_addresses_get_four_keys():
+    """R43: branches in one city must not share a fact key (a shared key = wrong answer + false conflict)."""
+    md = "\n\n".join(f"### Dupaco Credit Union\n\nDupaco Branch\n\n{a}, Dubuque, IA, {z}\n\nClosed"
+                    for a, z in [("3299 Hillcrest Rd.", "52001"), ("3999 Pennsylvania Ave.", "52002"),
+                                 ("1465 Sycamore St.", "52001"), ("2245 Flint Hill Dr.", "52003")])
+    obs = regex.extract(ctx(md, url="https://www.dupaco.com/contact"))
+    got = {o.fact_key: o.value_norm for o in obs if o.attribute == "address"}
+    assert got == {
+        "branch|address|name=dubuque-hillcrest-rd": "3299 Hillcrest Rd., Dubuque, IA 52001",
+        "branch|address|name=dubuque-pennsylvania-ave": "3999 Pennsylvania Ave., Dubuque, IA 52002",
+        "branch|address|name=dubuque-sycamore-st": "1465 Sycamore St., Dubuque, IA 52001",
+        "branch|address|name=dubuque-flint-hill-dr": "2245 Flint Hill Dr., Dubuque, IA 52003"}
+
+
+def test_phone_uses_same_slug_as_address():
+    md = "**Address:** 123 Main St, Dubuque, IA 52001\n\n**Phone:** (563) 555-1234"
+    obs = regex.extract(ctx(md))
+    assert get(obs, "branch|address|name=dubuque-main-st") == ["123 Main St, Dubuque, IA 52001"]
+    assert get(obs, "branch|phone|name=dubuque-main-st") == ["563-555-1234"]

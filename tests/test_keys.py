@@ -119,3 +119,37 @@ def test_norm_percent_two_decimals(s, v):
 def test_make_key_rejects_bad_parts(p, a, q):
     with pytest.raises(ValueError):
         make_key(p, a, q)
+
+
+# ---- Task 3.2a: every qualifier normaliser is idempotent (F10)
+
+_QUAL_SAMPLES = [
+    ("model_year", v) for v in ["2019 and older", "2023–26 Model Year", "2020 Model Year", "2024 or newer",
+                                "2021 and later", "2018 or earlier", "2023-2026", "0-2019", "2024-9999"]
+] + [("term", v) for v in ["60", "5 years", "36 months", "72 mo", "1 year"]
+] + [(k, v) for k in ("tier", "loan_amount") for v in [
+    "$10,000 - $24,999", "$25,000+", "up to $100,000", "$100,000 or less", "0-100000", "25000-inf",
+    "10000-24999.99", "$1,000 and over", "100000"]
+] + [("name", v) for v in ["Hy-Vee", "Asbury Road", "asbury-road", "Madison, Mineral Point Rd."]
+] + [("segment", "Business"), ("segment", "personal")]
+
+
+@pytest.mark.parametrize("k,v", _QUAL_SAMPLES)
+def test_qualifier_normalisers_idempotent(k, v):
+    from kb.extract.llm_facts import _norm_quals
+    once = _norm_quals("auto_loan", {k: v})
+    if once is None:
+        return
+    assert _norm_quals("auto_loan", dict(once)) == once
+
+
+@pytest.mark.parametrize("s", ["2019 and older", "2024 or newer", "2023–26", "2020"])
+def test_norm_model_year_idempotent(s):
+    once = norm_model_year(s)
+    assert norm_model_year(once) == once
+
+
+@pytest.mark.parametrize("s", ["$25,000+", "up to $100,000", "$10,000 - $24,999", "0-100000", "25000-inf"])
+def test_norm_band_idempotent(s):
+    once = norm_band(s, minimum=True)
+    assert norm_band(once, minimum=True) == once

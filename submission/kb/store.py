@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS fact_resolved (
   fact_key TEXT, snapshot_id TEXT, value_norm TEXT, obs_id INTEGER, losers_json TEXT,
   winner_json TEXT, rule TEXT,
   PRIMARY KEY (fact_key, snapshot_id));
+CREATE TABLE IF NOT EXISTS page_link (
+  snapshot_id TEXT, url TEXT, ord INTEGER, text TEXT, href TEXT, PRIMARY KEY (snapshot_id, url, text, href));
 CREATE TABLE IF NOT EXISTS answer_memo (
   intent_key TEXT, snapshot_id TEXT, answer_json TEXT, PRIMARY KEY (intent_key, snapshot_id));
 """
@@ -78,6 +80,18 @@ class Store:
         pid = self._db.execute("SELECT page_id FROM page WHERE snapshot_id=? AND url=?", (snapshot_id, url)).fetchone()[0]
         self._db.commit()
         return pid
+
+    def add_links(self, snapshot_id: str, url: str, links: list[tuple[str, str]]) -> None:
+        """A page's (link text, target) pairs; duplicates are ignored, first-seen order kept."""
+        n = self._db.execute("SELECT COUNT(*) FROM page_link WHERE snapshot_id=? AND url=?",
+                             (snapshot_id, url)).fetchone()[0]
+        self._db.executemany("INSERT OR IGNORE INTO page_link VALUES (?,?,?,?,?)",
+                             [(snapshot_id, url, n + i, t, h) for i, (t, h) in enumerate(links)])
+        self._db.commit()
+
+    def links(self, snapshot_id: str, url: str) -> list[tuple[str, str]]:
+        return [(r[0], r[1]) for r in self._db.execute(
+            "SELECT text, href FROM page_link WHERE snapshot_id=? AND url=? ORDER BY ord", (snapshot_id, url))]
 
     def add_chunks(self, snapshot_id: str, page_id: int, chunks: list[Chunk]) -> list[StoredChunk]:
         out = []

@@ -112,6 +112,22 @@ def test_prose_uses_llm_and_prompt_rules():
     assert "3 sentences" in llm.calls[0][0] and "question" in llm.calls[0][0].lower()
 
 
+def test_prose_refuses_account_name_absent_from_sections():
+    """ref-sapphire / ref-elite-visa: a named account no section mentions is refused, never answered from a neighbour."""
+    hit = Hit(1, "https://www.dupaco.com/mm", "A", "Achieve Money Market pays up to 3.66% APY.", 1.0, SID)
+    llm = FakeLLM("The money market pays 3.66% APY.")
+    it = Intent("fact", "money_market", "apy", {"segment": "personal", "name": "sapphire"}, None, "q", "k")
+    a = render_prose("What APY does the Sapphire Money Market pay?", it, [hit], SID, llm)
+    assert a.confident is False and "isn't listed on the website" in a.text and not llm.calls
+    it = Intent("fact", "credit_card", "apr", {"name": "platinum-elite-visa"}, None, "q", "k")
+    assert render_prose("q", it, [Hit(1, "u", "A", "Platinum Visa 12.50% APR.", 1.0, SID)], SID, llm).confident is False
+    # a real named account mentioned in the sections is answered; the account noun itself need not appear
+    it = Intent("fact", "money_market", "apy", {"name": "achieve"}, None, "q", "k")
+    assert render_prose("q", it, [hit], SID, llm).text == "The money market pays 3.66% APY."
+    it = Intent("fact", "credit_card", "apr", {"name": "platinum-visa"}, None, "q", "k")
+    assert render_prose("q", it, [Hit(1, "u", "A", "Platinum card: 12.50% APR.", 1.0, SID)], SID, llm).confident
+
+
 def test_no_question_back():
     for llm in (NoLLM(), FakeLLM("Which product would you like? It has no fee.")):
         assert "?" not in render_prose(PI.cleaned_question, PI, [HIT], SID, llm).text
@@ -262,3 +278,61 @@ def test_extractive_strips_chunk_title_prefix():
     assert "| Dupaco" not in a.text and "Galena Chrysler" in a.text
     h = Hit(5, "https://www.dupaco.com/x", "", "Checking | Dupaco\nFree checking has no monthly fee.", 1.0, SID)
     assert render_prose("monthly fee?", PI, [h], SID, NoLLM()).text == "Free checking has no monthly fee."
+
+
+def test_prose_sections_show_page_url_and_link_targets():
+    """A "what link / how do I join online" answer needs the page URL and the targets of links the section shows."""
+    llm = FakeLLM("Join online at https://join.dupaco.com/.")
+    h = Hit(5, "https://www.dupaco.com/about/join", "Join", "Ready to join?\nBecome a member\nContinue later", 1.0, SID)
+    links = {h.url: [("Become a member", "https://join.dupaco.com/"), ("Unrelated footer", "https://x.example/")]}
+    a = render_prose("How do I join online?", PI, [h], SID, llm, links=links)
+    system, user = llm.calls[0]
+    assert "https://www.dupaco.com/about/join" in user
+    assert "Become a member: https://join.dupaco.com/" in user and "x.example" not in user
+    assert "link" in system.lower()
+    assert a.text == "Join online at https://join.dupaco.com/."
+    render_prose("How do I join online?", PI, [h], SID, llm)  # links are optional
+    assert "join.dupaco.com" not in llm.calls[1][1]
+
+
+@pytest.mark.parametrize("out", [
+    "The provided information doesn't state a specific number of branches. It only says Dupaco has 600+ employees. NONE",
+    "The sections don't give a specific interest rate for a construction loan. It is a 1/1 ARM that can adjust 2%.",
+    "NONE.",
+])
+def test_prose_disclaimer_or_trailing_none_is_refusal(out):
+    """The model sometimes explains what the sections lack (and answers a neighbouring question) instead of NONE."""
+    a = render_prose("How many branches?", PI, [HIT], SID, FakeLLM(out))
+    assert not a.confident and not _numbers(a.text)
+
+
+def test_prose_meta_lead_in_is_not_a_disclaimer():
+    out = "Based on the sections provided, the locator is at https://www.dupaco.com/contact. It lists every branch."
+    a = render_prose("Branch locator URL?", PI, [HIT], SID, FakeLLM(out))
+    assert a.confident and "dupaco.com/contact" in a.text
+
+
+def test_prose_section_links_rank_by_question_not_page_order():
+    """Nav links come first in page order and short anchors match inside many sections; the asked link must survive
+    the cap. Anchors match as whole words only."""
+    llm = FakeLLM("ok")
+    nav = [(w, f"https://www.dupaco.com/{w.lower()}") for w in
+           ("Rates", "Loans", "Savings", "Checking", "Cards", "Insurance", "Business", "Learn", "About", "Careers",
+            "Contact", "Apply")]
+    text = ("Rates, Loans, Savings, Checking, Cards, Insurance, Business, Learn, About, Careers, Contact and Apply "
+            "menus.\nReady to join? Become a member online. Joining is easy.")
+    h = Hit(5, "https://www.dupaco.com/about/join", "Join", text, 1.0, SID)
+    links = {h.url: nav + [("Join", "https://www.dupaco.com/join-nav"),
+                           ("Become a member", "https://join.dupaco.com/")]}
+    render_prose("How do I become a member online?", PI, [h], SID, llm, links=links)
+    user = llm.calls[0][1]
+    assert "Become a member: https://join.dupaco.com/" in user
+    assert "join-nav" not in user  # "Join" is no whole word of the section ("join?" differs in case, "Joining" is longer)
+    assert user.count("https://www.dupaco.com/") <= compose.MAX_SECTION_LINKS + 1
+
+
+@pytest.mark.parametrize("out, refused", [("Annual fee: NONE.", False), ("No fee applies. NONE", True),
+                                          ("NONE", True)])
+def test_prose_none_only_as_whole_or_separate_trailing_sentence(out, refused):
+    a = render_prose("Annual fee?", PI, [HIT], SID, FakeLLM(out))
+    assert (not a.confident) is refused

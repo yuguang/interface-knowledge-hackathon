@@ -98,6 +98,10 @@ class KnowledgeSystem:
         except Exception:
             self._fail("chunk", page.url)
             chunks = _fallback_chunks(page.url, page.title, md)
+        try:  # link targets for prose answers ("where do I join online"); clean() keeps only link text
+            self.store.add_links(sid, page.url, normalize.page_links(page.markdown))
+        except Exception:
+            self._fail("links", page.url)
         page_id = self.store.add_page(sid, page.url, page.title, info, hashlib.sha256(md.encode("utf-8")).hexdigest())
         stored = self.store.add_chunks(sid, page_id, chunks)
         ctx = PageContext(sid, taken_on, page.url, page.title, info, md, stored)
@@ -159,7 +163,9 @@ class KnowledgeSystem:
         if ans is None:
             try:
                 picked = self.retriever.pick(it.cleaned_question, self.retriever.search(it.cleaned_question, sid))
-                ans = compose.render_prose(question, it, picked, sid, self.llm) if picked else self._refusal(question)
+                links = {h.url: self.store.links(sid, h.url) for h in picked}
+                ans = compose.render_prose(question, it, picked, sid, self.llm, links=links) if picked \
+                    else self._refusal(question)
             except Exception:
                 self._fail("retrieval", q80)
                 degraded = True

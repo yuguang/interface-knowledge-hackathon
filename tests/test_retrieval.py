@@ -376,3 +376,21 @@ def test_real_recall(request):
         ok += all(contains(blob, v) for v in it["must_include"])
     print(f"\nrecall {ok}/{len(items)}")
     assert ok >= 22
+
+
+def test_picker_excerpt_shows_matching_line_of_long_section():
+    """The value can sit past MAX_CHARS in a long section; the picker sees the question's best lines, not just the head."""
+    from kb.retrieval.picker import MAX_CHARS
+    filler = "\n".join(f"Paragraph {i} about community events and staff news." for i in range(30))
+    text = "Volunteering pays off\n" + filler + "\n- 294 Dupaco employees used Volunteer Time Off in 2023."
+    assert len(text) > 2 * MAX_CHARS
+    llm = FakeLLM({"chunk_ids": [1], "none_relevant": False})
+    pick_sections(llm, "How many employees used Volunteer Time Off?", [_hit(1, 1.0, text=text)])
+    user = llm.calls[0]["user"]
+    assert "294 Dupaco employees used Volunteer Time Off" in user and "Volunteering pays off" in user
+    assert len(user) < 2 * MAX_CHARS
+
+
+def test_picker_counts_page_url_for_link_questions():
+    from kb.retrieval.picker import SYSTEM
+    assert "link" in SYSTEM.lower() and "url" in SYSTEM.lower()

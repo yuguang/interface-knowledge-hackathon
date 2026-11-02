@@ -124,6 +124,9 @@ def norm_band(s: str, minimum: bool = False) -> Optional[str]:
 def norm_model_year(s: str) -> Optional[str]:
     """Model-year band: "2023\u201326 Model Year" -> "2023-2026", "2020 Model Year" -> "2020-2020"."""
     low = s.lower()
+    m = re.fullmatch(r"\s*(0|\d{4})-(\d{4})\s*", s)  # already normalised ("0-2019", "2024-9999"): unchanged
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
     m = re.search(r"\b(\d{4})" + _SEP + r"(\d{4}|\d{2})\b", s)
     if m:
         a, b = m.group(1), m.group(2)

@@ -1,9 +1,17 @@
-"""Conflict builder: one Conflict per fact key whose value differs across snapshots or within one."""
+"""Conflict builder: one Conflict per fact whose value differs across snapshots or within one.
+
+Precision filters (Task 3.3): values seen together on one page are table rows, not a disagreement;
+list-valued attributes never conflict; prose values are compared by the figures they state; keys that
+report one fact over time (yearly keys, relabelled model-year buckets) merge; and one change shown as
+APY and rate, or under mirrored labels, is reported once.
+"""
 from __future__ import annotations
+
+import re
 
 from contract import Conflict, Source
 
-from .keys import parse_key
+from .keys import make_key, parse_key
 from .model import FactObs
 from .snapshots import SnapshotRegistry
 from .store import Store
@@ -76,46 +84,270 @@ def _best(obs: list[FactObs]) -> FactObs:
     return max(obs, key=lambda o: (o.authority, o.taken_on, o.url))
 
 
-def _is_noise(by_value: dict[str, list[FactObs]]) -> bool:
-    """Disagreement that rests only on single-observation LLM extractions is not trusted."""
-    solid = [v for v, obs in by_value.items() if not (len(obs) == 1 and obs[0].extractor.startswith("llm:"))]
-    return len(solid) < 2
+# Qualifiers that pick a row of a rate table (or a point in time). Two keys that differ only in the
+# other qualifiers (product label, segment, kind, name) but share these are candidates for being the
+# same published row shown under several labels.
+_ROW_QUALS = ("term", "tier", "loan_amount", "model_year", "day", "what", "year")
+# List-valued attributes: several distinct values are several items, not a disagreement.
+_LIST_ATTRS = {"detail", "eligibility"}
+# Prose-valued attributes: two values disagree only when the figures they state differ.
+_PROSE_ATTRS = {"award", "count"}
+# A headline metric beats the derived one when the same row conflicts under both.
+_METRIC_SHADOW = {"rate": "apy", "apr": "rate"}  # drop key attr when the mapped attr also conflicts
+
+_NUM_WORDS = ("one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+              "sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety hundred "
+              "first second third fourth fifth sixth seventh eighth ninth tenth").split()
+_CLAIM_RE = re.compile(r"\$?\d[\d,]*(?:\.\d+)?\s*[kKmM]?\b|\b(?:" + "|".join(_NUM_WORDS) + r")\b", re.I)
 
 
-def _resolution(store: Store, registry: SnapshotRegistry, key: str):
-    """(resolved fact in snapshot 05, or the last resolved fact if the key is gone there, or None)."""
-    product, attr, _ = parse_key(key)
-    for sid in reversed(registry.ids()):
-        for r in store.resolved(sid, product, attr):
-            if r.fact_key == key:
+# A year is a date, not a figure, unless it reads as an amount or a count. A 19xx/20xx token is kept
+# as a figure when it is money or part of a larger number ("$2000", "2,000", "2000.5", "2000%"), or
+# when a plural noun follows it ("2000 members", "2000-2003 members"). Every other one is stripped,
+# whatever word precedes it ("in 2023", "of 2024", "from 2020 to 2024", "between 2020 and 2024").
+# A two-digit range tail ("2024/25", "2024-25") goes with its start year.
+_PLURAL_NEXT = r"\s+(?!(?:was|has|is|as|this|its|thus|always|less|unless|plus)\b)[a-z]+s\b"
+_YEAR_SPAN2_RE = re.compile(r"(?<![\$\d,.])\b((?:19|20)\d\d)\s*[-–/]\s*(\d\d)\b(?![,.]\d|\s*%)(?!" + _PLURAL_NEXT + ")",
+                            re.I)
+_YEAR_RE = re.compile(r"(?<![\$\d,.])\b(?:19|20)\d\d\b(?![,.]\d|\s*%)"
+                      r"(?!(?:\s*[-–/]\s*(?:19|20)?\d\d)?" + _PLURAL_NEXT + ")", re.I)
+
+
+def _strip_years(text: str) -> str:
+    text = _YEAR_SPAN2_RE.sub(" ", text)
+    return _YEAR_RE.sub(" ", text)
+
+
+def _figures(text: str) -> frozenset[str]:
+    return frozenset(tok.lower().replace("$", "").replace(",", "").replace(" ", "")
+                     for tok in _CLAIM_RE.findall(text))
+
+
+def _claim(value: str) -> frozenset[str]:
+    """The figures a prose value states ("twenty renewable scholarships" -> {"twenty"}), for comparison.
+
+    Dates are not figures: years are removed first, so "fourth time in 2023" vs "fifth time in 2023"
+    differ and "twenty scholarships" vs "twenty scholarships for 2026-2027" agree. Money and counts in
+    1900-2099 ("$2000", "2000 members") stay figures. A value whose only figures are
+    dates keeps them, so "awarded in 2023" vs "awarded in 2024" still compare."""
+    value = value or ""
+    return _figures(_strip_years(value)) or _figures(value)
+
+
+def _trusted(by_value: dict[str, list[FactObs]]) -> dict[str, list[FactObs]]:
+    """Drop values that rest on a single LLM observation: such disagreement is not trusted."""
+    return {v: obs for v, obs in by_value.items()
+            if not (len(obs) == 1 and obs[0].extractor.startswith("llm:"))}
+
+
+def _disagree(attr: str, a: str, b: str) -> bool:
+    if a == b:
+        return False
+    if attr in _PROSE_ATTRS:
+        ca, cb = _claim(a), _claim(b)
+        return bool(ca) and bool(cb) and not (ca & cb)
+    return True
+
+
+def _disputed_values(attr: str, by_value: dict[str, list[FactObs]]) -> list[str]:
+    """Values that take part in at least one real disagreement, in first-seen order.
+
+    Two values shown on the same page in the same snapshot are two rows whose distinguishing
+    qualifier we did not read (a tiered table), not a contradiction, so such a pair never counts.
+    """
+    pages = {v: {(o.snapshot_id, o.url) for o in obs} for v, obs in by_value.items()}
+    vals = list(by_value)
+    hit: set[str] = set()
+    for i, a in enumerate(vals):
+        for b in vals[i + 1:]:
+            if _disagree(attr, a, b) and not (pages[a] & pages[b]):
+                hit.update((a, b))
+    return [v for v in vals if v in hit]
+
+
+def _strip(key: str, drop: str) -> tuple[str, str, tuple]:
+    product, attr, q = parse_key(key)
+    return product, attr, tuple(sorted((k, v) for k, v in q.items() if k != drop))
+
+
+def _year_span(r: str):
+    lo, sep, hi = r.partition("-")
+    try:
+        return (int(lo), int(hi or lo))
+    except ValueError:
+        return None
+
+
+def _span_jaccard(a, b) -> float:
+    inter = min(a[1], b[1]) - max(a[0], b[0]) + 1
+    if inter <= 0:
+        return 0.0
+    return inter / (max(a[1], b[1]) - min(a[0], b[0]) + 1)
+
+
+def _key_groups(obs_by_key: dict[str, list[FactObs]]) -> list[list[str]]:
+    """Fact keys that report one fact over time, merged into one conflict candidate.
+
+    - Keys that differ only in `year`: a yearly figure (a ranking, a count) is one fact whose
+      value moves from year to year.
+    - Keys that differ only in `model_year` whose ranges overlap and that never appear on the same
+      page in the same snapshot: the site relabelled its model-year buckets ("2023-26" became
+      "2024-27"), so the row is the same. Each key pairs with its best-overlapping partner only,
+      and only when the choice is mutual.
+    """
+    parent = {k: k for k in obs_by_key}
+
+    def find(k):
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+
+    def union(a, b):
+        parent[find(a)] = find(b)
+
+    by_sans_year: dict[tuple, list[str]] = {}
+    by_sans_my: dict[tuple, list[str]] = {}
+    for k in obs_by_key:
+        q = parse_key(k)[2]
+        if "year" in q:
+            by_sans_year.setdefault(_strip(k, "year"), []).append(k)
+        if "model_year" in q and _year_span(q["model_year"]):
+            by_sans_my.setdefault(_strip(k, "model_year"), []).append(k)
+    for ks in by_sans_year.values():
+        for k in ks[1:]:
+            union(ks[0], k)
+    for ks in by_sans_my.values():
+        if len(ks) < 2:
+            continue
+        span = {k: _year_span(parse_key(k)[2]["model_year"]) for k in ks}
+        pages = {k: {(o.snapshot_id, o.url) for o in obs_by_key[k]} for k in ks}
+        best = {}
+        for a in ks:
+            scored = [(_span_jaccard(span[a], span[b]), b) for b in ks if b != a and not (pages[a] & pages[b])]
+            scored = [s for s in scored if s[0] > 0]
+            if scored:
+                best[a] = max(scored)[1]
+        for a, b in best.items():
+            if best.get(b) == a:
+                union(a, b)
+    groups: dict[str, list[str]] = {}
+    for k in obs_by_key:
+        groups.setdefault(find(k), []).append(k)
+    return [sorted(g) for g in groups.values()]
+
+
+class _Resolver:
+    """Latest resolved fact per key (snapshot 05, or the last snapshot the key was resolved in)."""
+
+    def __init__(self, store: Store, registry: SnapshotRegistry):
+        self._store, self._ids = store, registry.ids()
+        self._cache: dict[tuple, dict[str, object]] = {}
+
+    def __call__(self, key: str):
+        product, attr, _ = parse_key(key)
+        for sid in reversed(self._ids):
+            ck = (sid, product, attr)
+            if ck not in self._cache:
+                self._cache[ck] = {r.fact_key: r for r in self._store.resolved(sid, product, attr)}
+            r = self._cache[ck].get(key)
+            if r is not None:
                 return sid, r
-    return None, None
+        return None, None
+
+
+def _pick_resolution(resolver: _Resolver, ids: list[str], members: list[str]):
+    """(key, sid, resolved fact) whose value is current: resolved in the latest snapshot first, then the
+    newest `year`, then the highest-authority winner."""
+    best = None
+    for k in members:
+        sid, rf = resolver(k)
+        if rf is None:
+            continue
+        rank = (ids.index(sid), parse_key(k)[2].get("year", ""), rf.winner.authority, k)
+        if best is None or rank > best[0]:
+            best = (rank, k, sid, rf)
+    return (best[1], best[2], best[3]) if best else (None, None, None)
+
+
+def _preference(key: str) -> tuple:
+    """Which of several mirrored keys names the conflict: the plainest label."""
+    product, _, q = parse_key(key)
+    return (len(q), product == "ira", q.get("segment", "personal") != "personal", key)
+
+
+def _dedupe(cands: list[tuple[str, tuple, Conflict]]) -> list[tuple[str, tuple, Conflict]]:
+    """One conflict per underlying change.
+
+    - Metric shadow: the same row conflicting as APY and dividend rate (or rate and APR) is one change;
+      keep the headline metric.
+    - Mirrors: the same row (equal row qualifiers, same current value) under several labels
+      (business/personal, IRA/certificate, purchase/refinance) whose value histories nest is one
+      change; keep the plainest label.
+    """
+    present = {(parse_key(k)[0], parse_key(k)[1], _strip(k, "")[2]) for k, _, _ in cands}
+    kept = []
+    for k, m, c in cands:
+        product, attr, q = parse_key(k)
+        shadow = _METRIC_SHADOW.get(attr)
+        if shadow and (product, shadow, _strip(k, "")[2]) in present:
+            continue
+        kept.append((k, m, c))
+    rows: dict[tuple, list[tuple[str, tuple, Conflict]]] = {}
+    for k, m, c in kept:
+        _, attr, q = parse_key(k)
+        row = tuple((n, q[n]) for n in _ROW_QUALS if n in q)
+        rows.setdefault((attr, row, c.resolution), []).append((k, m, c))
+    out = []
+    for group in rows.values():
+        chosen: list[tuple[str, tuple, Conflict]] = []
+        for k, m, c in sorted(group, key=lambda kc: _preference(kc[0])):
+            vs = set(c.values)
+            if any(vs <= set(x.values) or vs >= set(x.values) for _, _, x in chosen):
+                continue
+            chosen.append((k, m, c))
+        out.extend(chosen)
+    return out
 
 
 def build_conflicts(store: Store, registry: SnapshotRegistry) -> list[Conflict]:
+    return [c for _, _, c in build_conflicts_detailed(store, registry)]
+
+
+def build_conflicts_detailed(store: Store, registry: SnapshotRegistry) -> list[tuple[str, tuple, Conflict]]:
+    """(fact key naming the conflict, the fact keys merged into it, Conflict), sorted by topic then values."""
     ids = registry.ids()
     if not ids:
         return []
     latest = registry.latest()
-    out: list[Conflict] = []
-    for key in store.fact_keys():
-        _, attr, _ = parse_key(key)
-        if attr == "detail":
-            continue
-        obs = store.facts(fact_key=key)
+    resolver = _Resolver(store, registry)
+    obs_by_key: dict[str, list[FactObs]] = {}
+    for o in store.facts():
+        if o.attribute not in _LIST_ATTRS:
+            obs_by_key.setdefault(o.fact_key, []).append(o)
+    cands: list[tuple[str, tuple, Conflict]] = []
+    for members in _key_groups(obs_by_key):
+        attr = parse_key(members[0])[1]
+        yearly = len(members) > 1 and all("year" in parse_key(k)[2] for k in members)
+        obs = sorted((o for k in members for o in obs_by_key[k]),
+                     key=lambda o: (o.qualifiers.get("year", "") if yearly else "", o.taken_on, o.url, o.fact_key))
         by_value: dict[str, list[FactObs]] = {}
-        for o in obs:  # facts() is ordered by taken_on: dict keeps first-seen order
+        for o in obs:  # ordered by (year,) taken_on: dict keeps first-seen order
             by_value.setdefault(o.value_norm, []).append(o)
-        if len(by_value) < 2 or _is_noise(by_value):
+        # the filters only decide whether to emit; an emitted conflict lists every distinct value (§9.5)
+        if len(_disputed_values(attr, _trusted(by_value))) < 2:
             continue
-        rsid, rf = _resolution(store, registry, key)
+        values = list(by_value)
+        rkey, rsid, rf = _pick_resolution(resolver, ids, members)
         if rf is not None:
             resolution = rf.value
         else:
-            resolution = obs[-1].value_norm
+            rkey, resolution = obs[-1].fact_key, obs[-1].value_norm
         reason = None
         if rf is not None and rsid == latest and any(l.value_norm != rf.value for l in rf.losers):
             reason = rf.rule
+        if reason is None and yearly:
+            reason = f"most recent year ({parse_key(rkey)[2]['year']})"
         if reason is None:
             # first snapshot of the winner's final unbroken run
             run_start = None
@@ -129,10 +361,16 @@ def build_conflicts(store: Store, registry: SnapshotRegistry) -> list[Conflict]:
                     run_start = None
             reason = f"updated in {run_start}" if run_start else f"latest value {resolution}"
         sources = []
-        for v, vobs in by_value.items():
-            b = _best(vobs)
+        for v in values:
+            b = _best(by_value[v])
             sources.append(Source(url=b.url, snapshot_id=b.snapshot_id, quote=b.quote))
-        out.append(Conflict(topic=_topic(key), values=list(by_value), sources=sources,
-                            resolution=resolution, reason=reason))
-    out.sort(key=lambda c: (c.topic, c.values))
+        # a merged group is named by its current key; a year-merged one drops the year
+        name = rkey if len(members) > 1 else members[0]
+        if yearly:
+            p, a, q = parse_key(name)
+            name = make_key(p, a, {n: v for n, v in q.items() if n != "year"})
+        cands.append((name, tuple(members), Conflict(topic=_topic(name), values=values, sources=sources,
+                                     resolution=resolution, reason=reason)))
+    out = _dedupe(cands)
+    out.sort(key=lambda kc: (kc[2].topic, kc[2].values))
     return out

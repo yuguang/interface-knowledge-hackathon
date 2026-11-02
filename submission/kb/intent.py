@@ -22,7 +22,7 @@ _NO_SEGMENT = {"branch", "org", "program"}
 
 # Product patterns, most specific first (matched against the lower-cased question).
 _PRODUCTS = [
-    ("credit_card", r"credit cards?|\bvisa\b"),
+    ("credit_card", r"credit cards?|\bvisa\b|\bmastercard\b"),
     ("construction_loan", r"construction (?:loan|mortgage)"),
     ("rv_loan", r"\brv\b|recreational vehicle"),
     ("auto_loan", r"auto(?:mobile)? loans?|car loans?|vehicle loans?|auto financing"),
@@ -86,7 +86,7 @@ def _find_product(low: str) -> Optional[str]:
 
 def _branch_name(q: str) -> Optional[str]:
     """Words directly before "branch"/"location" (walking back to the first stopword), as a hyphen slug."""
-    m = re.search(r"((?:[\w'.-]+\s+){0,3})branch\b", q, re.I)
+    m = re.search(r"((?:[\w'.-]+\s+){0,3})(?:branch|location|office)\b", q, re.I)
     if not m:
         return None
     words = []
@@ -95,6 +95,45 @@ def _branch_name(q: str) -> Optional[str]:
             break
         words.append(w)
     return _slug(" ".join(reversed(words))) or None
+
+
+# Account nouns whose preceding words can name a specific account ("Achieve Money Market", "Roth IRA").
+_NAMED_NOUN = {
+    "credit_card": r"\b(?:visa|mastercard)\b|\bcredit cards?\b",
+    "money_market": r"\bmoney market\b",
+    "checking": r"\bchecking\b",
+    "share_savings": r"\bsavings\b",
+    "ira": r"\biras?\b",
+}
+# Words before the noun that describe rather than name the account.
+_NAME_GENERIC = {"business", "personal", "regular", "fixed", "jumbo", "term", "share", "special", "standard",
+                 "new", "1st", "first", "rate", "rates", "interest", "dividend", "apy", "apr", "account", "accounts",
+                 "card", "cards", "credit", "basic", "plain", "current", "member", "members", "highest", "lowest",
+                 "best", "top", "maximum", "max", "minimum", "min", "greatest", "cheapest", "smallest", "typical",
+                 "average", "available", "offered", "open", "online", "dupaco"}
+
+
+def _product_name(low: str, product: str) -> Optional[str]:
+    """Slug of the words naming a specific account just before its noun ("sapphire" in "Sapphire Money Market",
+    "platinum-elite-visa" in "Platinum Elite Visa"); None for a generic mention ("business checking")."""
+    pat = _NAMED_NOUN.get(product)
+    m = re.search(pat, low) if pat else None
+    if not m:
+        return None
+    words = []
+    for w in reversed(re.findall(r"[a-z0-9$'.-]+", low[:m.start()])[-4:]):
+        w = w.strip(".'")
+        if w in _NAME_STOP or w in _STOP or w.endswith("'s") or w.startswith("$"):
+            break
+        if w in _NAME_GENERIC or re.search(r"\d", w):
+            continue
+        words.append(w)
+    if not words:
+        return None
+    tokens = list(reversed(words))
+    if product == "credit_card":  # card names are keyed "<name>-visa" (tables); a Mastercard keeps its own noun
+        tokens.append("mastercard" if "mastercard" in m.group(0) else "visa")
+    return _slug(" ".join(tokens))
 
 
 def _attribute(low: str) -> tuple[Optional[str], Optional[str]]:
@@ -110,11 +149,13 @@ def _attribute(low: str) -> tuple[Optional[str], Optional[str]]:
     if re.search(r"still open|open today|\bis .* open\b|already closed|\bis .* closed", low) \
             and re.search(r"branch|hy-?vee|location", low):
         return "status", "branch"
+    if re.search(r"\b(?:update|change|correct)\b.*\b(?:address|phone|contact)\b|\bon file\b", low):
+        return None, None  # the member's own contact details, not a branch address/phone (para-dup-060)
     if re.search(r"\baddress\b|\bwhere is\b.*\bbranch", low):
         return "address", "branch"
     if re.search(r"\bphone\b|call you|telephone", low):
         return "phone", None
-    if re.search(r"\b(?:link|url)\b", low):
+    if re.search(r"\b(?:link|url)\b|\bwhere\b[^?]*\b(?:website|web ?site|online)\b", low):
         return "url", None
     if re.search(r"recogni(?:tion|[sz]ed?)|\bawards?\b|\bwon\b", low):
         return "award", "org"
@@ -170,12 +211,15 @@ def _qualifiers(q: str, low: str, product: str, name: Optional[str], attribute: 
         a = re.search(r"\$\s*(\d[\d,]*(?:\.\d+)?)", q)
         if a:
             quals["tier" if product in _DEPOSITS else "loan_amount"] = _amount(a.group(1))
-    if product == "credit_card":
-        c = re.search(r"\b(platinum|rewards)\b", low)
-        if c:
-            quals["name"] = f"{c.group(1)}-visa"
-    elif name:
+    if name:
         quals["name"] = name
+    else:
+        pn = _product_name(low, product)
+        c = re.search(r"\b(platinum|rewards)\b", low) if product == "credit_card" else None
+        if pn:
+            quals["name"] = pn
+        elif c:  # "Visa Platinum card": the card name after the noun
+            quals["name"] = f"{c.group(1)}-visa"
     return quals
 
 
@@ -244,8 +288,8 @@ def parse(question: str, llm: Optional[LLM] = None) -> Intent:
         product = "branch"
     if product is None and attribute == "phone":
         product = "org"
-    if attribute == "award":
-        m = re.search(r"\bfrom ([A-Z][\w-]*)", q)
+    if attribute == "award":  # the awarding organisation: "from Forbes", else a capitalised non-Dupaco word
+        m = re.search(r"\bfrom ([A-Z][\w-]*)", q) or re.search(r"(?<=\s)(?!Dupaco)([A-Z][\w-]*)", q)
         name = _slug(m.group(1)) if m else None
     if product is None and re.search(r"home\$tart|homestart", low):
         product, attribute, name = "program", attribute or "detail", "homestart"
@@ -267,7 +311,7 @@ def parse(question: str, llm: Optional[LLM] = None) -> Intent:
 
     quals = _safe(_qualifiers(q, low, product, name, attribute))
     plural = re.search(r"credit cards|certificates\b|\bcds\b|branches|\btiers\b", low) and attribute != "count"
-    family = "list" if (re.search(r"\b(all|list|every)\b", low)
+    family = "list" if (re.search(r"\b(all|list|every)\b", low) or re.search(r"\bany\b.*\btiers?\b", low)
                         or re.search(r"\b(which|what)\b.*\b(offer|have)\b", low) or plural) else "fact"
     canonical = _canonical(family, product, attribute, quals, superlative, low)
     return Intent(family, product, None if attribute == _GENERIC_RATE else attribute, quals, superlative, cleaned,

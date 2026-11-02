@@ -97,3 +97,12 @@ def test_same_text_different_url_is_two_chunks():
     p = st.add_page(S1, "u1", "T", INFO, "x")
     a, b = st.add_chunks(S1, p, [mk("same text", "u1"), mk("same text", "u2")])
     assert a.chunk_id != b.chunk_id and st.chunk(b.chunk_id).chunk.url == "u2"
+
+
+def test_links_roundtrip_per_snapshot_and_url():
+    st = store2()
+    st.add_links(S1, "u1", [("Join", "https://join.x/"), ("Join", "https://join.x/")])
+    st.add_links(S2, "u1", [("Apply", "https://apply.x/")])
+    assert st.links(S1, "u1") == [("Join", "https://join.x/")]
+    assert st.links(S2, "u1") == [("Apply", "https://apply.x/")]
+    assert st.links(S1, "nope") == []
