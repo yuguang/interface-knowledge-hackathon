@@ -156,6 +156,16 @@ def _narrowest(sel: list, name: str) -> list:
     return [s for s in sel if name not in s[3] or _width(s[3][name]) == best[_group(s[3], name)]]
 
 
+def _widest(sel: list, name: str) -> list:
+    """Among facts differing only in band qualifier `name`, keep the widest band (the largest-loan tier)."""
+    best: dict[tuple, float] = {}
+    for s in sel:
+        if name in s[3]:
+            g = _group(s[3], name)
+            best[g] = max(best.get(g, -1.0), _width(s[3][name]))
+    return [s for s in sel if name in s[3] and _width(s[3][name]) == best[_group(s[3], name)]]
+
+
 _DEPOSITS = frozenset({"certificate", "certificate_special", "share_savings", "money_market", "checking",
                        "bright_savings", "jump_start", "ira"})
 # Extra non-band qualifier one key may carry over another and still be the same account (LLM facts without
@@ -281,8 +291,11 @@ def select_for_intent(intent: Intent, resolved: list[ResolvedFact]) -> list[Reso
     # Headline rules for under-specified intents (qualifiers the intent did not set).
     if intent.product == "mortgage_fixed":
         if "loan_amount" not in q:
-            sel = [s for s in sel if "loan_amount" not in s[3] or band_contains(s[3]["loan_amount"], 100000)]
-            sel = _narrowest(sel, "loan_amount")
+            head = [s for s in sel if "loan_amount" not in s[3] or band_contains(s[3]["loan_amount"], 100000)]
+            head = _narrowest(head, "loan_amount")
+            if "term" in q:  # a named term ("30-year") is a rate-range question: also state the largest-loan tier
+                head += [s for s in _widest(sel, "loan_amount") if s not in head]
+            sel = head
         if "kind" not in q:  # purchase rows (no kind) over refinance rows with the same other qualifiers
             plain = {_group(s[3], "kind") for s in sel if "kind" not in s[3]}
             sel = [s for s in sel if "kind" not in s[3] or _group(s[3], "kind") not in plain]

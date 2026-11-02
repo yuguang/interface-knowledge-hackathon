@@ -81,6 +81,24 @@ def test_mortgage_headline():
     assert sorted(r.value for r in sel) == ["6.25%", "7.13%"]
 
 
+def test_mortgage_explicit_term_adds_largest_tier():
+    """dup-009: "30-year mortgage" names a term but no amount. Lead with the $100k tier and also state the
+    largest-loan tier (the rate range). Without a term (dup-011) the $100k headline stands alone."""
+    def k(attr, band, t=360):
+        return f"mortgage_fixed|{attr}|loan_amount={band};term={t}"
+    st = build([obs(k("rate", "0-100000"), "7.13%"), obs(k("rate", "0-300000"), "7.25%"),
+                obs(k("rate", "0-832750"), "7.25%"), obs(k("apr", "0-100000"), "7.27%"),
+                obs(k("apr", "0-832750"), "7.29%"), obs(k("rate", "0-100000", 180), "6.25%"),
+                obs(k("rate", "0-832750", 180), "6.40%")])
+    res = resolve_snapshot(st, "s5")
+    sel = select_for_intent(intent("mortgage_fixed", None, {"term": "360"}), res)
+    assert sorted(r.value for r in sel) == ["7.13%", "7.25%", "7.27%", "7.29%"]  # no $300k tier, no 15-year
+    sel = select_for_intent(intent("mortgage_fixed", None, {"term": "360", "loan_amount": "50000"}), res)
+    assert sorted(r.value for r in sel) == ["7.13%", "7.27%"]  # an explicit amount still wins
+    sel = select_for_intent(intent("mortgage_fixed", None), res)
+    assert "7.29%" not in [r.value for r in sel]  # no term: headline only
+
+
 def test_auto_newest_model_year():
     st = build([obs("auto_loan|apr|model_year=2020-2022", "6%"), obs(K, "5%")])
     sel = select_for_intent(intent("auto_loan", "apr"), resolve_snapshot(st, "s5"))
