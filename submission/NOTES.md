@@ -1,5 +1,51 @@
 # NOTES: how the system decides what is current
 
+## Overview
+
+The site is crawled five times and the copies disagree, so the system does not search the pages and hope
+for the best. At ingest it reads each snapshot, oldest first, and turns the pages into **facts**. A fact
+is a normalised value (for example `5.39%`) filed under a key made of a product, an attribute and the
+qualifiers that make it specific: term, balance tier, loan amount, model year, personal or business, branch
+name. A 60-month rate and a 48-month rate, or the rate and the APY for the same account, get different
+keys, so they are never treated as a conflict. Each fact remembers its page, its page type, the page's own
+date if it has one, and the snapshot it came from. Tables are parsed by code, hours, addresses and the
+routing number by regular expressions, and prose facts by Claude Haiku 5.5. The prose facts are cached by
+chunk hash and the cache is committed, so a fresh clone makes few API calls.
+
+**How it decides what is current.** For one fact key in one snapshot, only pages that exist in that
+snapshot count. News and press pages, and promotions whose stated end date has passed, are set aside when
+any other source exists. The remaining observations are narrowed in order: the page type with the highest
+authority wins (rate sheet, then product page, branch page, disclosure, calculator, promotion, blog or
+news, and last the old `info.dupaco.com` pages); then the newest date printed on the page; then the value
+that first appeared in the latest snapshot. This is how a rate page's 5.39% beats a calculator page that
+was never updated and still says 5.34%. Anything still tied is settled by page type and then URL, so the
+result is always the same. The winner is stored per snapshot, and the losing values are kept for the
+conflict report. "Current" is the winner in the latest snapshot (05). A question with an `as_of` date is
+answered from the latest snapshot crawled on or before that date, and nothing else is consulted, so it can't
+see later values. The full rules are in the policy section below.
+
+**Answering.** The question is reduced to an intent (product, attribute, qualifiers), with rules first and
+Claude Haiku 5.5 only when the rules find no product, so reworded questions land on the same intent. If a
+resolved fact matches, a template writes the answer from the winning value and cites its page. Only the
+winning value is stated, because repeating an old number scores as an error. When no fact matches, the
+system searches the chosen snapshot with keyword search and embedding search merged together. Haiku picks the
+sections that state the asked value for the asked product, and Claude Sonnet 5.5 writes a short answer from
+them alone. If no section states the value, the system says it isn't listed on the website and points the
+member to Dupaco, with no numbers in the reply. This also covers things the site mentions but never prices,
+such as a 7/1 ARM rate or a construction loan rate. A final pass removes any value known to be stale for the
+asked fact. Answers are memoised per canonical intent and snapshot, which keeps repeated and reworded
+questions consistent.
+
+**Conflicts.** `conflicts()` returns one entry per fact key whose value differs across the snapshots, whether
+it changed over time or two pages disagreed within a snapshot. Each entry lists every value in the order it
+appeared, and `resolution` is the current value. Filters drop look-alikes that are really different tiers,
+terms or table rows. Where the rules can't separate two values, the system picks the higher-authority page
+and reports the disagreement. There is no separate model that judges these ties; that idea is in
+`IMPROVEMENTS.md` but was not built.
+
+The sections below give the details: the step lists, the exact authority policy and how the code applies it,
+the `as_of` rule, the refusal rule, the choices for chunk dedup and conflicts, API use, and local scores.
+
 ## Approach
 
 `solution.py` → `build()` returns `kb.system.KnowledgeSystem` with the three contract methods. Every
@@ -162,6 +208,33 @@ resolution accuracy 0.909.
   returns `None` to the caller, which degrades the same way. A degraded answer is not memoised.
 - Other environment variables: `KB_DB_PATH` (SQLite store; default `submission/.cache/kb.sqlite`,
   deleted at every `build()`) and `KB_LLM_CACHE` (default `submission/.cache/llm.sqlite`).
+
+## Latest public-eval comparison
+
+Local reruns on 2026-11-02 evaluated both implementations against the same 40 questions in
+`eval/public_eval.jsonl`, without the optional `--judge` or `--conflicts-gold` flags.
+The submission used the configured environment and existing local caches; these are not cold-start
+measurements.
+
+| Metric | `starter/` | `submission/` |
+|---|---|---|
+| Accuracy | 0.093 | 0.8085 |
+| Tier disambiguation | 0.00 | 1.00 |
+| Stale traps | 0.14 | 0.7929 |
+| Final score | 0.093 | 0.7762 |
+| p95 answer latency | 0.33 s | 6.08 s |
+| Ingest time | ~0 s | 449.2 s |
+| Errors | 0 | 0 |
+
+Both runs reported 0 forbidden-value trap hits and paraphrase and repeat consistency of 1.0.
+The submission is substantially more accurate, at the cost of ingest time and slower tail latency.
+Its final score is below its accuracy because the p95 latency exceeds the harness's 2 s threshold
+for full speed credit.
+
+The submission report is `results/submission-rerun-20261102T040300Z/report.json`; the starter report
+is in the timestamped `results/starter-rerun-*` directory from the same session.
+These local artifacts are not committed. These results are not directly comparable to the older
+judge-enabled run below, which also included the conflicts pillar scored against dev gold.
 
 ## Current scores (local, `dev/scores.csv`)
 
