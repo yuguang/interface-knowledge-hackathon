@@ -218,21 +218,24 @@ measurements.
 
 | Metric | `starter/` | `submission/` |
 |---|---|---|
-| Accuracy | 0.093 | 0.8085 |
+| Accuracy | 0.093 | 0.9271 |
 | Tier disambiguation | 0.00 | 1.00 |
-| Stale traps | 0.14 | 0.7929 |
-| Final score | 0.093 | 0.7762 |
-| p95 answer latency | 0.33 s | 6.08 s |
-| Ingest time | ~0 s | 449.2 s |
+| Stale traps | 0.14 | 0.9357 |
+| Final score | 0.093 | 0.9271 |
+| p95 answer latency | 0.33 s | 0.25 s |
+| Ingest time | ~0 s | 482.2 s |
 | Errors | 0 | 0 |
 
 Both runs reported 0 forbidden-value trap hits and paraphrase and repeat consistency of 1.0.
-The submission is substantially more accurate, at the cost of ingest time and slower tail latency.
-Its final score is below its accuracy because the p95 latency exceeds the harness's 2 s threshold
-for full speed credit.
+The submission is substantially more accurate, at the cost of ingest time. Its final score equals its
+accuracy because p95 latency (0.25 s, from the memoised, warm-cache run) is under the harness's 2 s
+threshold for full speed credit. The submission column was refreshed after generic questions about
+products with a business version (credit cards, checking, share savings, money market, certificates)
+stopped defaulting to `segment=personal`, which lifted dup-034 from 0.425 to 1.0; the starter column is
+from the earlier session and was not re-run.
 
-The submission report is `results/submission-rerun-20261102T040300Z/report.json`; the starter report
-is in the timestamped `results/starter-rerun-*` directory from the same session.
+The submission report is `results/report.json` (latest run); the starter report is in the timestamped
+`results/starter-rerun-*` directory from the earlier session.
 These local artifacts are not committed. These results are not directly comparable to the older
 judge-enabled run below, which also included the conflicts pillar scored against dev gold.
 

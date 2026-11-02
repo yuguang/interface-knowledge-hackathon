@@ -267,13 +267,6 @@ def _routing(em: _Emitter, lines: list[str], sentences: list[str]) -> None:
 _COUNT = re.compile(r"\b(\d{2})\s+(?:full-service\s+)?(?:branches|branch (?:office )?locations|branch offices)\b", re.I)
 
 
-def _evergreen(ctx: PageContext) -> bool:
-    """Not a dated news/blog page (R33): old press-release boilerplate must not share keys with current values."""
-    if ctx.info.page_type in ("news", "blog"):
-        return False
-    return not re.search(r"/(?:newsroom|blog|learn/blog)(?:/|$)", ctx.url.lower())
-
-
 def _counts(em: _Emitter, lines: list[str], sentences: list[str]) -> None:
     # News/blog boilerplate ("It has ... 22 branch office locations") is often the only place a count is stated.
     # It is kept (with the page's date) so the resolver's newest-date rule picks the current count over old releases.

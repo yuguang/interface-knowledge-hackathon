@@ -98,11 +98,12 @@ def test_hours_and_address_share_branch_name():
     assert {o.qualifiers["name"] for o in obs} == {"dubuque-main-st"}
 
 
-def test_award_keyed_by_year_and_news_counts_skipped():
+def test_award_keyed_by_year_and_news_counts_kept():
     md = "June 18, 2024\n\nThis was the fifth time Forbes recognized Dupaco.\nDupaco has 22 branches."
     obs = regex.extract(ctx(md, url="https://www.dupaco.com/newsroom/forbes"))
     assert get(obs, "org|award|name=forbes;year=2024") == ["fifth"]
-    assert not [o for o in obs if o.attribute == "count"]
+    # 89bd310: news/blog boilerplate counts are kept (the resolver's newest-date rule picks the current one)
+    assert get(obs, "org|count|what=branches") == ["22"]
     obs = regex.extract(ctx("Dupaco has 22 branches.", url="https://www.dupaco.com/about"))
     assert get(obs, "org|count|what=branches") == ["22"]
 
@@ -122,8 +123,9 @@ def test_real_routing_counts_awards_all_snapshots():
         for o in obs:
             by.setdefault(o.fact_key, set()).add(o.value_norm)
         assert by["org|routing_number|"] == {"273974581"}, snap.snapshot_id
-        # no evergreen page states a branch count, and dated releases are skipped (R33)
-        assert "org|count|what=branches" not in by, snap.snapshot_id
+        # branch counts come from news/blog boilerplate (89bd310); the resolver's newest-date rule picks one
+        assert by["org|count|what=branches"], snap.snapshot_id
+        assert all(int(v) >= 10 for v in by["org|count|what=branches"]), snap.snapshot_id
         awards = {k: v for k, v in by.items() if k.startswith("org|award|")}
         assert awards == {"org|award|name=forbes;year=2023": {"fourth"},
                           "org|award|name=forbes;year=2024": {"fifth"}}, snap.snapshot_id

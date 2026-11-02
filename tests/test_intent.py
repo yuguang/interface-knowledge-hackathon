@@ -251,6 +251,15 @@ def test_branch_count_matches_c2_key(text):
     assert (i.product, i.attribute, i.qualifiers) == ("org", "count", {"what": "branches"})
 
 
+def test_llm_labelled_count_is_not_a_branch_count():
+    """dup-088: an LLM-only `count` must not inherit what=branches (it collided with dup-073's key)."""
+    fake = FakeLLM({"product": "org", "attribute": "count"})
+    i = parse("How many Dupaco employees used Volunteer Time Off last year?", fake)
+    assert fake.calls == 1
+    assert i.family == "prose" and i.attribute is None
+    assert i.canonical != parse("How many branches does Dupaco have?").canonical
+
+
 def test_tiers_question_is_list():
     assert parse("Do any Dupaco savings tiers pay 0.35% APY?").family == "list"
 
@@ -280,3 +289,84 @@ def test_branch_question_slug_matches_extractor_slug_and_resolves():
     assert sorted(r.value for r in select_for_intent(i, res)) == ["1465 Sycamore St.", "3299 Hillcrest Rd."]
     i = parse("What is the address of the Dubuque branch on Asbury?")
     assert i.qualifiers == {"name": "dubuque"}
+
+
+@pytest.mark.parametrize("question", [
+    "Get me the rate for the certificate of accounts.",
+    "What is the rate on a certificate?",
+    "What are the CD rates?",
+])
+def test_bare_certificate_rate_is_list(question):
+    i = parse(question)
+    assert i.product in ("certificate", "certificate_special") and i.family == "list"
+
+
+@pytest.mark.parametrize("question", [
+    "What is the rate for the 12 month certificate?",
+    "What is the APY on the certificate?",
+])
+def test_named_term_or_attribute_certificate_stays_fact(question):
+    assert parse(question).family == "fact"
+
+
+# --- generic questions about products that also have a business version span both segments (dup-034, dup-040) ---
+
+@pytest.mark.parametrize("question, product", [
+    ("What credit cards do you offer and what are their APRs?", "credit_card"),
+    ("I would like to know the rates for the credit cards", "credit_card"),
+    ("What are the checking account rates?", "checking"),
+    ("What are the money market rates?", "money_market"),
+    ("What is the share savings dividend rate?", "share_savings"),
+    ("What are the CD rates?", "certificate"),
+])
+def test_generic_question_on_product_with_business_version_has_no_segment(question, product):
+    i = parse(question)
+    assert i.product == product
+    assert "segment" not in i.qualifiers
+
+
+@pytest.mark.parametrize("question, segment", [
+    ("What are the business credit card APRs?", "business"),
+    ("What are the personal credit card APRs?", "personal"),
+    ("What are the business checking rates?", "business"),
+    ("What are the personal checking account rates?", "personal"),
+])
+def test_named_segment_is_still_filtered(question, segment):
+    assert parse(question).qualifiers["segment"] == segment
+
+
+def test_named_card_keeps_personal_default():
+    i = parse("What is the APR on the Platinum Visa card?")
+    assert i.qualifiers["segment"] == "personal" and i.qualifiers["name"] == "platinum-visa"
+
+
+@pytest.mark.parametrize("question, product", [
+    ("What are your mortgage rates?", "mortgage_fixed"),
+    ("What is the auto loan APR?", "auto_loan"),
+    ("What are your student loan rates?", "student_loan"),
+])
+def test_product_without_business_version_keeps_personal_default(question, product):
+    i = parse(question)
+    assert i.product == product and i.qualifiers["segment"] == "personal"
+
+
+def test_generic_card_question_selects_personal_and_business_cards():
+    from kb.keys import parse_key
+    from kb.model import AUTHORITY, FactObs, ResolvedFact
+    from kb.resolve import select_for_intent
+
+    def rf(key, value):
+        p, a, fq = parse_key(key)
+        o = FactObs(key, p, a, fq, value, value, "s5", "2026-09-28", "https://x/cards", "product",
+                    AUTHORITY["product"], None, "", "regex")
+        return ResolvedFact(key, value, o, [], "single source")
+
+    res = [rf("credit_card|apr|name=platinum-visa;segment=personal", "12.50%"),
+           rf("credit_card|apr|name=rewards-visa;segment=personal", "15.50%"),
+           rf("credit_card|apr|name=platinum-visa;segment=business", "15.50%"),
+           rf("credit_card|apr|name=rewards-visa;segment=business", "20.50%")]
+    got = select_for_intent(parse("What credit cards do you offer and what are their APRs?"), res)
+    assert sorted(r.fact_key for r in got) == sorted(r.fact_key for r in res)
+    only = select_for_intent(parse("What are the business credit card APRs?"), res)
+    assert sorted(r.value for r in only) == ["15.50%", "20.50%"]
+    assert all("segment=business" in r.fact_key for r in only)

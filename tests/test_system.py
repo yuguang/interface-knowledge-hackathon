@@ -260,7 +260,7 @@ def test_prose_answer_gets_link_targets_of_picked_pages(monkeypatch):
     ks.ingest(Snapshot("05_2026-09-28_latest", "2026-09-28", [Page(url, "Join", md, "2026-09-28T00:00:00Z")] + other))
     seen = {}
 
-    def prose(question, it, hits, sid, llm, links=None):
+    def prose(question, it, hits, sid, llm, links=None, **kw):
         seen["links"] = links
         return Answer(text="Use the Become a member button.")
     monkeypatch.setattr(compose, "render_prose", prose)

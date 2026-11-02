@@ -19,6 +19,9 @@ from .model import Intent
 _DEPOSITS = {"certificate", "certificate_special", "share_savings", "money_market", "checking",
              "bright_savings", "jump_start", "ira"}
 _NO_SEGMENT = {"branch", "org", "program"}
+# Products with business facts next to the personal ones (resolved-store audit). A generic question on one of them
+# names no segment, so selection spans both (dup-034, dup-040); the others default to personal.
+_HAS_BUSINESS = {"credit_card", "checking", "share_savings", "money_market", "certificate", "certificate_special"}
 
 # Product patterns, most specific first (matched against the lower-cased question).
 _PRODUCTS = [
@@ -195,7 +198,6 @@ def _qualifiers(q: str, low: str, product: str, name: Optional[str], attribute: 
         if name:
             quals["name"] = name
         return quals
-    quals["segment"] = "business" if re.search(r"\bbusiness\b", low) else "personal"
     m = re.search(r"(?<!\d)(\d{1,3})\s*-?\s*(months?|mos?\b|years?|yrs?\b)", low)
     if m:
         n = int(m.group(1))
@@ -220,6 +222,12 @@ def _qualifiers(q: str, low: str, product: str, name: Optional[str], attribute: 
             quals["name"] = pn
         elif c:  # "Visa Platinum card": the card name after the noun
             quals["name"] = f"{c.group(1)}-visa"
+    if re.search(r"\bbusiness\b", low):
+        quals["segment"] = "business"
+    elif product in _HAS_BUSINESS and "name" not in quals and not re.search(r"\bpersonal\b", low):
+        pass  # generic question: no segment filter, personal and business facts are both candidates
+    else:
+        quals["segment"] = "personal"
     return quals
 
 
@@ -297,7 +305,9 @@ def parse(question: str, llm: Optional[LLM] = None) -> Intent:
 
     if product is None and llm is not None:
         p, a = _llm_labels(cleaned, llm)
-        if p:
+        # `count` is only structured for branch counts (regex path); an LLM-labelled count is some other
+        # quantity ("employees used Volunteer Time Off"), so leave it to prose retrieval (dup-088).
+        if p and a != "count":
             product, attribute = p, a
 
     superlative = None
@@ -312,8 +322,11 @@ def parse(question: str, llm: Optional[LLM] = None) -> Intent:
 
     quals = _safe(_qualifiers(q, low, product, name, attribute))
     plural = re.search(r"credit cards|certificates\b|\bcds\b|branches|\btiers\b", low) and attribute != "count"
+    # A bare certificate/CD rate question (no term named) wants every term read back, not one account's rate.
+    cert_all = (product in ("certificate", "certificate_special") and attribute == _GENERIC_RATE
+                and "term" not in quals)
     family = "list" if (re.search(r"\b(all|list|every)\b", low) or re.search(r"\bany\b.*\btiers?\b", low)
-                        or re.search(r"\b(which|what)\b.*\b(offer|have)\b", low) or plural) else "fact"
+                        or re.search(r"\b(which|what)\b.*\b(offer|have)\b", low) or plural or cert_all) else "fact"
     canonical = _canonical(family, product, attribute, quals, superlative, low)
     return Intent(family, product, None if attribute == _GENERIC_RATE else attribute, quals, superlative, cleaned,
                   canonical)
