@@ -168,6 +168,11 @@ def _row_obs(ctx: PageContext, ctx_text: str, header: list[str], line: str, chun
                         and re.search(r"fixed|conventional|refinance|purchase", c, re.I)]).strip()
     header_txt = " ".join(h for h, r in zip(header, roles) if r == "label")
     prod = _product(label, header_txt + " " + ctx_text, ctx.url + " " + ctx.title)
+    if prod is None and not label and "term" in by_role and "apy" in by_role \
+            and not _UNMAPPED.search(ctx_text.lower()):
+        # "| Term | Dividend Rate | APY | Min. to Earn |" under a bare "Regular" tab (snapshots 01-03): a
+        # term-by-APY deposit table with nothing else naming it is the regular certificate table.
+        prod = "certificate"
     if prod is None:
         return []
     quals: dict[str, str] = {}

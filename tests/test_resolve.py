@@ -100,6 +100,14 @@ def test_undated_award_question_selects_latest_year():
     assert [r.value for r in sel] == ["fourth"]
 
 
+def test_year_holding_a_band_is_not_a_year():
+    """LLM facts sometimes put a balance band in `year`; those keys are not pruned as older years."""
+    ks = [f"money_market|apy|name=achieve;year={b}" for b in ("0.00-24999.99", "25000-99999.99")]
+    st = build([obs(ks[0], "0.00%"), obs(ks[1], "3.66%")])
+    sel = select_for_intent(intent("money_market", "apy", {"name": "achieve"}), resolve_snapshot(st, "s5"))
+    assert sorted(r.value for r in sel) == ["0.00%", "3.66%"]
+
+
 def test_missing_qualifier_no_match_and_exact():
     st = build([obs("certificate|apy|term=12", "4%"), obs("certificate|apy|term=24", "3%")])
     res = resolve_snapshot(st, "s5")

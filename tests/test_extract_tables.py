@@ -129,6 +129,30 @@ def test_term_column_holding_program_description():
     assert f["mortgage_fixed|rate|kind=refinance;loan_amount=0-200000;segment=personal;term=360"].value_norm == "5.875%"
 
 
+def test_unlabelled_term_apy_table_is_regular_certificate():
+    """asof-cert12: snapshots 01-03 print regular certificates under a bare "Regular" tab with a Term column."""
+    md = ("[Explore](https://www.dupaco.com/personal/savings/certificates/)\n\nRegular\n\n"
+          "| Term | Dividend Rate | Annual Percentage Yield (APY)1 | Min. to Earn |\n| --- | --- | --- | --- |\n"
+          "| 12 Month | 2.88% | 2.90% | $1,000 |")
+    f = by_key(extract(ctx(md, url="https://www.dupaco.com/personal/savings-account", title="Savings Accounts")))
+    assert f["certificate|apy|segment=personal;term=12;tier=1000-inf"].value_norm == "2.90%"
+    assert f["certificate|rate|segment=personal;term=12;tier=1000-inf"].value_norm == "2.88%"
+    # a Term + APR table (loans) is not swept into certificates
+    md2 = "Regular\n\n| Term | APR |\n| --- | --- |\n| 12 Month | 2.90% |"
+    assert extract(ctx(md2, url="https://www.dupaco.com/x", title="X")) == []
+
+
+@pytest.mark.real
+def test_real_snapshot01_regular_certificates():
+    d = REAL / "01_2026-05-12_baseline"
+    if not d.exists():
+        pytest.skip("no snapshots")
+    man = json.loads((d / "manifest.json").read_text())
+    p = next(p for p in man["pages"] if p["url"].rstrip("/").endswith("/personal/savings-account"))
+    f = by_key(extract(ctx((d / p["file"]).read_text(encoding="utf-8"), url=p["url"], title=p["title"])))
+    assert f["certificate|apy|segment=personal;term=12;tier=1000-inf"].value_norm == "2.90%"
+
+
 def test_unmapped_named_account_skipped():
     md = "| Account Type | Balance Tier | APY |\n| --- | --- | --- |\n| Launchpad Savings | $5 - $1,000 | 3.25% |"
     assert extract(ctx(md, url="https://www.dupaco.com/personal/retirement")) == []
