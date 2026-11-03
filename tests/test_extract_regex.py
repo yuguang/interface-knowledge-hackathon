@@ -184,3 +184,42 @@ def test_phone_uses_same_slug_as_address():
     obs = regex.extract(ctx(md))
     assert get(obs, "branch|address|name=dubuque-main-st") == ["123 Main St, Dubuque, IA 52001"]
     assert get(obs, "branch|phone|name=dubuque-main-st") == ["563-555-1234"]
+
+
+VTO_2023 = "294 Dupaco employees used a new paid benefit in 2023 called Volunteer Time Off"
+VTO_2024 = "256 Dupaco employees used a paid benefit in 2024 called Volunteer Time Off (or VTO)"
+
+
+def test_vto_employee_count_is_keyed_by_reporting_year():
+    md = f"Community impact\n\n{VTO_2023}, giving back to the community.\n\n{VTO_2024} to support causes."
+    obs = regex.extract(ctx(md))
+    assert get(obs, "org|count|what=vto-employees;year=2023") == ["294"]
+    assert get(obs, "org|count|what=vto-employees;year=2024") == ["256"]
+    o = [x for x in obs if x.fact_key.endswith("year=2023")][0]
+    assert o.extractor == "regex" and o.chunk_id == 7
+    assert "294 Dupaco employees" in o.quote and len(o.quote) <= 200
+
+
+@pytest.mark.parametrize("text", [
+    "Dupaco has 650 employees and offers Volunteer Time Off in 2024.",
+    "Employees volunteered 3,400 hours through Volunteer Time Off in 2024.",
+    "12 Dupaco employees served on boards in 2024.",
+    "256 Dupaco employees used Volunteer Time Off last year.",
+    "256 Dupaco members used a paid benefit in 2024 called Volunteer Time Off.",
+    "256 Dupaco employees attended training in 2024.",
+])
+def test_vto_count_rejects_unrelated_numbers(text):
+    assert not [o for o in regex.extract(ctx(text)) if "vto-employees" in o.fact_key]
+
+
+def test_vto_multi_year_sentence_never_attaches_a_year():
+    text = "294 employees used a benefit in 2022, up from 100 in 2021 called VTO"
+    assert not [o for o in regex.extract(ctx(text)) if "vto-employees" in o.fact_key]
+
+
+def test_vto_comma_count_and_leading_year_form():
+    obs = regex.extract(ctx("1,294 Dupaco employees used a paid benefit in 2024 called Volunteer Time Off."))
+    assert get(obs, "org|count|what=vto-employees;year=2024") == ["1294"]
+    # leading-year form is deliberately unmatched (kept out to avoid wrong-year risk)
+    obs = regex.extract(ctx("In 2023, 294 Dupaco employees used Volunteer Time Off."))
+    assert not [o for o in obs if "vto-employees" in o.fact_key]

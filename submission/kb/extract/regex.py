@@ -282,6 +282,21 @@ def _counts(em: _Emitter, lines: list[str], sentences: list[str]) -> None:
         em.add("org", "count", {"what": "branches"}, m.group(1), m.group(1), s)
 
 
+_VTO = re.compile(r"\b(\d{1,3}(?:,\d{3})*)\s+(?:Dupaco\s+)?employees\s+(?:\w+\s+){0,2}?used\s+[^.]{0,80}?"
+                  r"\bin\s+(20\d\d)\b[^.]{0,40}?\b(?:Volunteer Time Off|VTO)\b", re.I)
+
+
+def _vto_counts(em: _Emitter, lines: list[str]) -> None:
+    """Employees who used the VTO benefit, keyed by the reporting year named in the sentence (never the page date),
+    so each year's count is its own fact and years never conflict with each other."""
+    for s in _sentences(lines):
+        m = _VTO.search(s)
+        # a sentence naming several years ("... in 2022, up from 100 in 2021 ...") is ambiguous: never guess one
+        if m and len(set(re.findall(r"\b20\d\d\b", s))) == 1:
+            em.add("org", "count", {"what": "vto-employees", "year": m.group(2)},
+                   m.group(1), m.group(1).replace(",", ""), s)
+
+
 _CLOSE = re.compile(rf"\b(?:will (?:permanently |officially )?close|will be closed|is closing|closes|closing)\b"
                     rf"[^.]{{0,60}}?\b({_DATE})", re.I)
 _CLOSE_NAME = re.compile(r"\b(?:The|the)\s+([A-Z][\w\-]*(?:\s+[A-Z][\w\-]*)?)\s+(?:branch|location|office)\b")
@@ -363,7 +378,7 @@ def extract(ctx: PageContext) -> list[FactObs]:
     for fn in (lambda: _hours(em, lines), lambda: _address(em, lines), lambda: _phone(em, lines),
                lambda: _routing(em, lines, sentences), lambda: _counts(em, lines, sentences),
                lambda: _closures(em, lines, sentences), lambda: _awards(em, lines, sentences),
-               lambda: _programs(em, lines)):
+               lambda: _programs(em, lines), lambda: _vto_counts(em, lines)):
         try:
             fn()
         except Exception:  # one pattern failing must not drop the others

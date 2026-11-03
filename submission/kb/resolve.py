@@ -185,6 +185,20 @@ def rate_attributes(product: Optional[str]) -> tuple[str, ...]:
     return ("apy", "rate") if product in _DEPOSITS else ("apr", "rate")
 
 
+_CERT_PRODUCTS = ("certificate", "certificate_special")
+_SCOPE_PRODUCTS = {"all": _CERT_PRODUCTS, "regular": ("certificate",), "special": ("certificate_special",)}
+
+
+def products_for_intent(intent: Intent) -> tuple[str, ...]:
+    """Products an intent covers: a certificate scope spans regular and/or special certificates; any other product
+    intent keeps its own product; a productless (prose) intent covers none."""
+    if not intent.product:
+        return ()
+    if intent.product in _CERT_PRODUCTS and intent.certificate_scope in _SCOPE_PRODUCTS:
+        return _SCOPE_PRODUCTS[intent.certificate_scope]
+    return (intent.product,)
+
+
 def attribute_matches(intent: Intent, attribute: str) -> bool:
     """An intent with a product but no attribute is a generic "rate" question (intent.parse): rate plus APY/APR."""
     if intent.attribute:
@@ -197,7 +211,7 @@ def matching(intent: Intent, resolved: list[ResolvedFact]) -> list[ResolvedFact]
     out = []
     for r in resolved:
         p, a, _ = parse_key(r.fact_key)
-        if (not intent.product or p == intent.product) and attribute_matches(intent, a):
+        if (not intent.product or p in products_for_intent(intent)) and attribute_matches(intent, a):
             out.append(r)
     return out
 
@@ -284,7 +298,7 @@ def select_for_intent(intent: Intent, resolved: list[ResolvedFact]) -> list[Reso
     parsed = [(r, parse_key(r.fact_key)) for r in resolved]
     sel = []
     for r, (p, a, fq) in parsed:
-        if intent.product and p != intent.product:
+        if intent.product and p not in products_for_intent(intent):
             continue
         if not attribute_matches(intent, a):
             continue

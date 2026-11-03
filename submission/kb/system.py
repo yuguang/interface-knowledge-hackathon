@@ -13,7 +13,7 @@ from typing import Optional
 
 from contract import Answer, Conflict, Snapshot, Source
 
-from . import classify, compose, conflicts as conflicts_mod, intent, normalize, resolve, tracing
+from . import classify, compose, conflicts as conflicts_mod, intent, normalize, resolve, temporal, tracing
 from .extract import llm_facts, regex, tables
 from .llm import LLM
 from .model import AUTHORITY, Chunk, Intent, PageContext, PageInfo, chunk_hash
@@ -155,6 +155,13 @@ class KnowledgeSystem:
             self._fail("intent", q80)
             degraded = True
             it = Intent("prose", None, None, {}, None, question, question.lower().strip())
+        try:  # the reporting year joins the intent (and so the memo key); it never changes the snapshot chosen above
+            period = temporal.resolve_reporting_period(question, as_of, self.registry.taken_on(self.registry.latest()))
+            it = temporal.apply_reporting_period(it, period)
+            tracing.annotate(reference_date=period.reference_date, reporting_year=period.year)
+        except Exception:
+            self._fail("temporal", q80)
+            degraded = True
         tracing.annotate(intent_family=it.family, product=it.product, attribute=it.attribute,
                          canonical=it.canonical)
         memo = self.store.memo_get(it.canonical, sid)
@@ -164,7 +171,9 @@ class KnowledgeSystem:
         sel, cands = [], []
         if it.product:
             try:
-                cands = self.store.resolved(sid, it.product, it.attribute)
+                # every product the intent spans (a certificate scope covers regular and special), in a fixed order
+                for prod in resolve.products_for_intent(it):
+                    cands += self.store.resolved(sid, prod, it.attribute)
                 sel = resolve.select_for_intent(it, cands)
             except Exception:
                 self._fail("select", q80)
@@ -185,6 +194,9 @@ class KnowledgeSystem:
             except Exception:  # fall through to the retrieval path
                 self._fail("render_facts", q80)
                 degraded = True
+        if ans is None and not sel and not degraded and temporal.is_vto_count(it):
+            # no VTO count fact (or not for the requested year): refuse, never answer from nearby prose
+            ans = self._refusal(question)
         if ans is None:
             try:
                 rq = it.cleaned_question

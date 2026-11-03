@@ -259,3 +259,29 @@ Every `build()` deletes the SQLite store, and the dense index deletes its Chroma
 second run therefore re-chunks, re-extracts and re-embeds every chunk with the ONNX model, and none of
 that is cached. Local runs that reused the LLM cache still took 376–456 s to ingest, so the plan's
 "under 2 min warm" target is not met. The hard limit of 30 min is met.
+
+## Certificate scope and reporting-year policy
+
+**Certificate scope.** A generic certificate question (no tier named) loads candidates for every scoped
+product and reads back all terms rather than asking which term. Terms, specials (e.g. 17-Month
+Certificate Special), jumbo tiers and their minimums, and segment restrictions are kept distinct, so a
+request for one tier does not leak another tier's rate.
+
+**Reporting year / reference date.** The reference date is, in order: an explicit `as_of`, a date in the
+question, then the latest snapshot's taken-on date. The wall clock is never used. "Last year" means the
+year before the reference year; with no period named, the latest year with a published fact is used. If
+the requested year (or any annual VTO fact) does not exist, the system refuses instead of substituting
+another year. Annual VTO counts are keyed `what=vto-employees;year=YYYY` (2023 = 294, 2024 = 256).
+
+**Dev diagnostics.** `dev/completeness_temporal_eval.jsonl` holds certificate-inventory, tier and
+annual-VTO cases; unavailable-year cases use `should_refuse` so the scorer checks refusal rather than
+giving every empty-token answer zero.
+
+**Benchmark caveats (gold not changed; seek organizer clarification).**
+- dup-005 has no `must_include` tokens, so under the unjudged scorer it cannot reward a complete
+  certificate listing; only the not-asking-which-term trap applies.
+- dup-088 is ambiguous: its gold expects 294 (2023), but with a 2026 reference "last year" is 2025,
+  which is not published, so the original item may remain at zero. We do not special-case it.
+
+Live, judged and public-evaluation results were not measured in this change; only the deterministic
+suite was run.

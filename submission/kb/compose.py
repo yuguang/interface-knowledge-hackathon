@@ -159,6 +159,9 @@ def _line(fact: ResolvedFact, rate: Optional[ResolvedFact] = None) -> str:
         who = f"{pre + ' ' if pre else ''}{label}"
         extra = f" for {post}" if post else ""
         return f"The {who} {unit}{extra} is {verb}{v} {unit}{tail}."
+    if (product, attribute) == ("org", "count") and q.get("what") == "vto-employees" and q.get("year") \
+            and v.isdigit():
+        return f"In {q['year']}, {int(v):,} Dupaco employees used Volunteer Time Off."
     what = {"rate": "rate", "min_balance": "minimum balance", "hours_lobby": "lobby hours",
             "hours_driveup": "drive-up hours", "address": "address", "phone": "phone number", "status": "status",
             "closure_date": "closure date", "routing_number": "routing number", "count": "count", "url": "web address",

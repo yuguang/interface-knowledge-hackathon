@@ -336,3 +336,29 @@ def test_prose_section_links_rank_by_question_not_page_order():
 def test_prose_none_only_as_whole_or_separate_trailing_sentence(out, refused):
     a = render_prose("Annual fee?", PI, [HIT], SID, FakeLLM(out))
     assert (not a.confident) is refused
+
+
+def test_certificate_facts_across_products_one_line_each_with_pairs():
+    sel = [rf("3.01%", "certificate|apy|term=3"), rf("3.00%", "certificate|rate|term=3"),
+           rf("7.95%", "certificate_special|apy|kind=jumbo;term=10;tier=100000-inf"),
+           rf("5.55%", "certificate_special|apy|term=17;tier=1000-99999.99")]
+    a = render_facts("q", Intent("list", "certificate", "apy", {}, None, "q", "q", "all"), sel, SID)
+    lines = a.text.splitlines()
+    assert len(lines) == 3
+    assert "3.01%" in lines[0] and "3.00%" in lines[0]
+    assert "7.95%" in lines[1] and "5.55%" in lines[2]
+    assert len(a.sources) == 1 and a.sources[0].snapshot_id == SID
+
+
+def test_vto_count_template():
+    key = "org|count|what=vto-employees;year=2023"
+    a = render_facts("q", Intent("fact", "org", "count", {"what": "vto-employees", "year": "2023"}, None, "q", "q"),
+                     [rf("294", key)], SID)
+    assert a.text == "In 2023, 294 Dupaco employees used Volunteer Time Off."
+    a = render_facts("q", intent(), [rf("1294", "org|count|what=vto-employees;year=2024")], SID)
+    assert a.text == "In 2024, 1,294 Dupaco employees used Volunteer Time Off."
+
+
+def test_other_count_template_unchanged():
+    a = render_facts("q", intent(), [rf("12", "org|count|what=branches")], SID)
+    assert a.text == "The Dupaco count for branches is 12."

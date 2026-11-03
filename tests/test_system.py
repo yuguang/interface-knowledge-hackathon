@@ -267,3 +267,199 @@ def test_prose_answer_gets_link_targets_of_picked_pages(monkeypatch):
     monkeypatch.setattr(ks.retriever, "pick", lambda q, hits: hits[:1])
     ks.answer("How do I join Dupaco online?")
     assert seen["links"] == {url: [("Become a member", "https://join.dupaco.com/")]}
+
+
+# ---- certificate scope through answer generation (Task 2)
+
+def _cert_ks():
+    """A system ingested (at store level) with regular + special certificates: May and latest snapshots."""
+    from kb import resolve
+    from kb.keys import parse_key
+    from kb.model import AUTHORITY, FactObs, PageInfo
+    ks = build()
+    snaps = {"01_2026-05-12_a": "2026-05-12", "05_2026-09-28_latest": "2026-09-28"}
+    url = "https://www.dupaco.com/rates/certificates"
+    for sid, d in snaps.items():
+        ks.registry.add(sid, d)
+        ks.store.add_snapshot(sid, d)
+        ks.store.add_page(sid, url, "t", PageInfo("rate_sheet", AUTHORITY["rate_sheet"], None), "h")
+        rows = []
+        for t in (3, 6, 12, 24, 36, 60):
+            rows += [(f"certificate|apy|term={t}", f"{t}.01%"), (f"certificate|rate|term={t}", f"{t}.00%")]
+        for t in (10, 17):
+            jumbo = ("7.90%" if sid.startswith("01") else "7.95%") if t == 10 else "5.55%"
+            rows += [(f"certificate_special|apy|term={t};tier=1000-99999.99", f"{t}.51%"),
+                     (f"certificate_special|apy|kind=jumbo;term={t};tier=100000-inf", jumbo)]
+        obs = []
+        for key, val in rows:
+            p, a, q = parse_key(key)
+            obs.append(FactObs(key, p, a, q, val, val, sid, d, url, "rate_sheet", AUTHORITY["rate_sheet"], None,
+                               f"{key} {val}", "table"))
+        ks.store.add_facts(obs)
+        ks.store.set_resolved(sid, resolve.resolve_snapshot(ks.store, sid))
+    return ks
+
+
+def test_generic_certificate_answer_includes_regular_and_specials():
+    ks = _cert_ks()
+    a = ks.answer("What are your certificate rates?")
+    assert a.confident and "?" not in a.text
+    lines = [l for l in a.text.splitlines() if l.strip()]
+    assert len(lines) > 4
+    for v in ("3.01%", "60.01%", "10.51%", "17.51%", "5.55%", "7.95%"):
+        assert v in a.text
+    assert "7.90%" not in a.text
+
+
+def test_regular_certificate_answer_excludes_specials():
+    ks = _cert_ks()
+    a = ks.answer("What are the regular certificate rates?")
+    assert "3.01%" in a.text and "60.01%" in a.text
+    assert "10.51%" not in a.text and "7.95%" not in a.text and "5.55%" not in a.text
+
+
+def test_certificate_list_keeps_rate_and_apy_pairs():
+    ks = _cert_ks()
+    a = ks.answer("What are your certificate rates?")
+    for t in (3, 6, 12, 24, 36, 60):
+        assert any(f"{t}.01%" in l and f"{t}.00%" in l for l in a.text.splitlines()), t
+    assert {s.snapshot_id for s in a.sources} == {"05_2026-09-28_latest"}
+    assert all(s.url == "https://www.dupaco.com/rates/certificates" for s in a.sources)
+
+
+def test_certificate_as_of_never_mixes_jumbo_special_values():
+    ks = _cert_ks()
+    may = ks.answer("What are your certificate rates?", as_of="2026-05-15")
+    assert "7.90%" in may.text and "7.95%" not in may.text
+    assert {s.snapshot_id for s in may.sources} == {"01_2026-05-12_a"}
+    latest = ks.answer("What are your certificate rates?")
+    assert "7.95%" in latest.text and "7.90%" not in latest.text
+
+
+# ---- VTO reporting-year routing (Task 4)
+
+VTO_URL = "https://www.dupaco.com/about/community"
+VTO_SID = "05_2026-09-28_latest"
+
+
+def _vto_ks():
+    from kb import resolve
+    from kb.keys import parse_key
+    from kb.model import AUTHORITY, FactObs, PageInfo
+    counts = {"2023": "294", "2024": "256"}
+    ks = build()
+    d = "2026-09-28"
+    ks.registry.add(VTO_SID, d)
+    ks.store.add_snapshot(VTO_SID, d)
+    ks.store.add_page(VTO_SID, VTO_URL, "t", PageInfo("other", AUTHORITY["other"], None), "h")
+    obs = []
+    for y, c in counts.items():
+        key = f"org|count|what=vto-employees;year={y}"
+        p, a, q = parse_key(key)
+        obs.append(FactObs(key, p, a, q, c, c, VTO_SID, d, VTO_URL, "other", AUTHORITY["other"], None,
+                           f"{c} Dupaco employees used VTO in {y}", "regex"))
+    ks.store.add_facts(obs)
+    ks.store.set_resolved(VTO_SID, resolve.resolve_snapshot(ks.store, VTO_SID))
+    return ks
+
+
+def _spy_retrieval(monkeypatch):
+    from kb.retrieval.pipeline import Retriever
+    calls = []
+    monkeypatch.setattr(Retriever, "search", lambda self, *a, **k: calls.append(a) or [])
+    return calls
+
+
+@pytest.mark.parametrize("q,year,count", [
+    ("How many Dupaco employees used Volunteer Time Off in 2023?", "2023", "294"),
+    ("How many Dupaco employees used Volunteer Time Off in 2024?", "2024", "256"),
+    ("How many Dupaco employees used VTO?", "2024", "256"),
+])
+def test_vto_count_selects_requested_or_latest_year(q, year, count, monkeypatch):
+    ks = _vto_ks()
+    calls = _spy_retrieval(monkeypatch)
+    a = ks.answer(q)
+    assert a.confident and a.text == f"In {year}, {count} Dupaco employees used Volunteer Time Off."
+    assert not calls and a.sources and a.sources[0].url == VTO_URL
+
+
+def test_vto_missing_requested_year_refuses_without_retrieval(monkeypatch):
+    ks = _vto_ks()
+    calls = _spy_retrieval(monkeypatch)
+    for q in ("How many Dupaco employees used Volunteer Time Off last year?",
+              "How many Dupaco employees used Volunteer Time Off in 2022?"):
+        a = ks.answer(q)
+        assert a.confident is False and not a.sources and "294" not in a.text and "256" not in a.text
+    assert not calls and not ks.stage_errors
+
+
+def test_vto_undated_without_vto_facts_refuses_without_retrieval(monkeypatch):
+    from kb import resolve
+    from kb.keys import parse_key
+    from kb.model import AUTHORITY, FactObs, PageInfo
+    ks = build()
+    d = "2026-09-28"
+    ks.registry.add(VTO_SID, d)
+    ks.store.add_snapshot(VTO_SID, d)
+    ks.store.add_page(VTO_SID, VTO_URL, "t", PageInfo("other", AUTHORITY["other"], None), "h")
+    key = "org|count|what=branches"
+    p, a, q = parse_key(key)
+    ks.store.add_facts([FactObs(key, p, a, q, "13", "13", VTO_SID, d, VTO_URL, "other", AUTHORITY["other"], None,
+                                "13 branches; employees volunteered 3,400 hours", "regex")])
+    ks.store.set_resolved(VTO_SID, resolve.resolve_snapshot(ks.store, VTO_SID))
+    calls = _spy_retrieval(monkeypatch)
+    a = ks.answer("How many employees used VTO?")
+    assert a.confident is False and not a.sources and not any(c.isdigit() for c in a.text)
+    assert not calls and not ks.stage_errors
+
+
+def test_vto_last_year_is_relative_to_reference_date():
+    ks = _vto_ks()
+    assert "In 2023, 294" in ks.answer("How many employees used VTO last year?", as_of="2024-12-31").text
+    assert "In 2024, 256" in ks.answer("How many employees used VTO last year?", as_of="2025-12-31").text
+
+
+def test_vto_memo_is_keyed_by_reporting_year():
+    ks = _vto_ks()
+    q = "How many employees used VTO last year?"
+    a23 = ks.answer(q, as_of="2024-12-31")
+    a24 = ks.answer(q, as_of="2025-12-31")
+    assert "294" in a23.text and "256" in a24.text
+    assert "294" in ks.store.memo_get("org|count|what=vto-employees;year=2023|fact|", VTO_SID)["text"]
+    assert "256" in ks.store.memo_get("org|count|what=vto-employees;year=2024|fact|", VTO_SID)["text"]
+    assert "294" in ks.answer(q, as_of="2024-12-31").text and "256" in ks.answer(q, as_of="2025-12-31").text
+
+
+def test_vto_trace_fields(monkeypatch):
+    from kb import tracing
+    seen = {}
+    monkeypatch.setattr(tracing, "annotate", lambda **kw: seen.update(kw))
+    _vto_ks().answer("How many employees used VTO last year?", as_of="2024-12-31")
+    assert seen["reference_date"] == "2024-12-31" and seen["reporting_year"] == "2023"
+
+
+@pytest.mark.parametrize("q", ["What are the certificate APYs?", "CD APYs"])
+def test_apy_worded_certificate_request_lists_regular_and_specials(q):
+    ks = _cert_ks()
+    a = ks.answer(q)
+    lines = [l for l in a.text.splitlines() if l.strip()]
+    assert len(lines) > 4
+    for v in ("3.01%", "60.01%", "10.51%", "17.51%", "5.55%", "7.95%"):
+        assert v in a.text
+
+
+def test_regular_and_special_request_includes_both(monkeypatch):
+    ks = _cert_ks()
+    a = ks.answer("Show me certificate rates and specials")
+    for v in ("3.01%", "60.01%", "10.51%", "7.95%"):
+        assert v in a.text
+
+
+def test_vto_took_last_year_refuses_without_retrieval(monkeypatch):
+    ks = _vto_ks()
+    calls = _spy_retrieval(monkeypatch)
+    a = ks.answer("How many Dupaco employees took Volunteer Time Off last year?")
+    assert a.confident is False and not a.sources and "294" not in a.text and "256" not in a.text
+    assert not calls and not ks.stage_errors
+    ok = ks.answer("How many Dupaco employees took Volunteer Time Off in 2024?")
+    assert ok.confident and "256" in ok.text

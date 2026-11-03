@@ -1,3 +1,4 @@
+import re
 import json
 from pathlib import Path
 
@@ -255,9 +256,24 @@ def test_llm_labelled_count_is_not_a_branch_count():
     """dup-088: an LLM-only `count` must not inherit what=branches (it collided with dup-073's key)."""
     fake = FakeLLM({"product": "org", "attribute": "count"})
     i = parse("How many Dupaco employees used Volunteer Time Off last year?", fake)
-    assert fake.calls == 1
-    assert i.family == "prose" and i.attribute is None
+    assert fake.calls == 0  # recognised by rules, before any LLM fallback
+    assert (i.family, i.product, i.attribute, i.qualifiers) == ("fact", "org", "count", {"what": "vto-employees"})
     assert i.canonical != parse("How many branches does Dupaco have?").canonical
+    assert "branches" not in i.canonical
+
+
+@pytest.mark.parametrize("text", ["How many Dupaco employees used Volunteer Time Off?",
+                                  "How many employees used VTO?",
+                                  "How many employees used Volunteer Time Off in 2023?"])
+def test_vto_employee_count_intent(text):
+    i = parse(text)
+    assert (i.family, i.product, i.attribute, i.qualifiers) == ("fact", "org", "count", {"what": "vto-employees"})
+    assert i.canonical == "org|count|what=vto-employees|fact|"
+
+
+@pytest.mark.parametrize("text", ["How many employees does Dupaco have?", "What is Volunteer Time Off?"])
+def test_other_employee_and_vto_questions_stay_prose(text):
+    assert parse(text).family == "prose"
 
 
 def test_tiers_question_is_list():
@@ -370,3 +386,110 @@ def test_generic_card_question_selects_personal_and_business_cards():
     only = select_for_intent(parse("What are the business credit card APRs?"), res)
     assert sorted(r.value for r in only) == ["15.50%", "20.50%"]
     assert all("segment=business" in r.fact_key for r in only)
+
+
+# --- certificate scope: generic CD lists must cover regular and special certificates (Task 1) ---
+
+@pytest.mark.parametrize("question, product, scope", [
+    ("What are the CD rates?", "certificate", "all"),
+    ("List all of Dupaco's certificates and their APYs.", "certificate", "all"),
+    ("What are the regular CD rates?", "certificate", "regular"),
+    ("What are the standard certificates and their APYs?", "certificate", "regular"),
+    ("What are the special CD rates?", "certificate_special", "special"),
+    ("Which special certificates do you offer and what are their APYs?", "certificate_special", "special"),
+])
+def test_certificate_scope_parsing(question, product, scope):
+    i = parse(question)
+    assert (i.product, i.certificate_scope) == (product, scope)
+
+
+def test_certificate_scope_keeps_restrictions_and_named_terms():
+    assert parse("What are the business CD rates?").qualifiers["segment"] == "business"
+    assert parse("What are the business CD rates?").certificate_scope == "all"
+    assert parse("What are the personal special CD rates?").qualifiers["segment"] == "personal"
+    assert parse("What is the rate for the 12 month certificate?").certificate_scope is None
+    assert parse("What is the APY on the 17-month special certificate?").certificate_scope is None
+    assert parse("What is the rate on a savings account?").certificate_scope is None
+    assert parse("What are the credit card rates?").certificate_scope is None
+
+
+def test_certificate_scopes_have_distinct_canonicals():
+    allc = parse("What are the CD rates?")
+    reg = parse("What are the regular CD rates?")
+    spec = parse("What are the special CD rates?")
+    assert len({allc.canonical, reg.canonical, spec.canonical}) == 3
+    assert parse("What are the CD rates?").canonical == parse("What are the certificate rates?").canonical
+
+
+# --- final-review fixes ---
+
+def _vto_fixture_questions():
+    import json, pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent / "dev"
+    out = []
+    for name in ("paraphrase_eval.jsonl", "completeness_temporal_eval.jsonl"):
+        for line in (root / name).read_text().splitlines():
+            if line.strip():
+                r = json.loads(line)
+                if re.search(r"volunteer time off|\bvto\b", r["question"], re.I):
+                    out.append(r["question"])
+    return out
+
+
+def test_vto_fixture_questions_parse_as_vto_counts():
+    qs = _vto_fixture_questions()
+    assert len(qs) >= 6
+    for q in qs:
+        i = parse(q)
+        assert (i.product, i.attribute) == ("org", "count"), q
+        assert i.qualifiers.get("what") == "vto-employees", q
+
+
+@pytest.mark.parametrize("q", [
+    "How many employees took VTO?", "How many employees have used Volunteer Time Off?",
+    "How many employees participated in Volunteer Time Off?", "How many employees utilized VTO in 2024?",
+    "How many Dupaco employees have taken Volunteer Time Off?",
+])
+def test_vto_participation_verbs(q):
+    assert parse(q).qualifiers.get("what") == "vto-employees"
+
+
+def test_unrelated_employee_and_branch_counts_unchanged():
+    assert parse("How many employees does Dupaco have?").qualifiers.get("what") != "vto-employees"
+    assert parse("How many branches does Dupaco have?").qualifiers == {"what": "branches"}
+
+
+@pytest.mark.parametrize("q", ["What are the certificate APYs?", "CD APYs", "What are the CD rates and APYs?"])
+def test_generic_certificate_apy_requests_list_all(q):
+    i = parse(q)
+    assert (i.family, i.product, i.certificate_scope) == ("list", "certificate", "all")
+    assert i.attribute in ("apy", "rate", None)
+    assert i.attribute is not None or "apy" not in q.lower()
+
+
+def test_certificate_apy_keeps_attribute_and_named_term_unchanged():
+    assert parse("What are the certificate APYs?").attribute == "apy"
+    assert parse("What is the APY on the 12 month certificate?").certificate_scope is None
+
+
+@pytest.mark.parametrize("q", [
+    "What are the regular and special CD rates?",
+    "What are your certificate rates, including specials?",
+    "Show me certificate rates and specials",
+    "Regular and special certificate APYs",
+])
+def test_regular_plus_special_scope_all(q):
+    i = parse(q)
+    assert (i.product, i.certificate_scope) == ("certificate", "all"), q
+
+
+@pytest.mark.parametrize("q, product, scope", [
+    ("What are the special CD rates?", "certificate_special", "special"),
+    ("What are the non-special CD rates?", "certificate", "regular"),
+    ("What are the nonspecial CD rates?", "certificate", "regular"),
+    ("What are the standard CD rates?", "certificate", "regular"),
+    ("What are the regular CD rates?", "certificate", "regular"),
+])
+def test_single_scope_unchanged(q, product, scope):
+    i = parse(q)
+    assert (i.product, i.certificate_scope) == (product, scope), q

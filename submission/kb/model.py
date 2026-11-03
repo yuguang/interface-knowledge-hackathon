@@ -95,6 +95,7 @@ class Intent:
     superlative: Optional[str]  # "highest" | "lowest" | None
     cleaned_question: str
     canonical: str  # memo key; equal for paraphrases
+    certificate_scope: Optional[str] = None  # None | "all" | "regular" | "special" (certificate list requests only)
 
 
 @dataclass(frozen=True)

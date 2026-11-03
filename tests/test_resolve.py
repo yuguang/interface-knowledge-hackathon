@@ -1,7 +1,7 @@
 import pytest
 
 from kb.model import AUTHORITY, FactObs, Intent, PageInfo
-from kb.resolve import resolve_snapshot, select_for_intent, stale_values
+from kb.resolve import matching, products_for_intent, resolve_snapshot, select_for_intent, stale_values
 from kb.store import Store
 
 DATES = {"s1": "2026-05-12", "s2": "2026-05-19", "s5": "2026-09-28"}
@@ -322,3 +322,76 @@ def test_branch_name_token_subset():
     assert f("key-west") == []
     # other qualifiers stay exact
     assert [r.fact_key for r in select_for_intent(intent("branch", "hours_lobby", {"name": "madison", "day": "sat"}), res)] == []
+
+
+# --- certificate scope: exhaustive, filter-preserving selection (Task 1) ---
+
+REG_TERMS = (3, 6, 9, 12, 18, 24, 36, 60)
+
+
+def cert_inventory(attrs=("apy",)):
+    keys = []
+    for seg in ("personal", "business"):
+        for a in attrs:
+            keys += [f"certificate|{a}|segment={seg};term={t}" for t in REG_TERMS]
+            for term in (10, 17):
+                keys.append(f"certificate_special|{a}|segment={seg};term={term};tier=1000-99999.99")
+                keys.append(f"certificate_special|{a}|kind=jumbo;segment={seg};term={term};tier=100000-inf")
+    return keys
+
+
+def cert_intent(scope, attribute="apy", q=None, family="list"):
+    product = {"all": "certificate", "regular": "certificate", "special": "certificate_special"}[scope]
+    return Intent(family, product, attribute, q or {}, None, "", "c", scope)
+
+
+def test_products_for_intent():
+    assert products_for_intent(cert_intent("all")) == ("certificate", "certificate_special")
+    assert products_for_intent(cert_intent("regular")) == ("certificate",)
+    assert products_for_intent(cert_intent("special")) == ("certificate_special",)
+    assert products_for_intent(intent("auto_loan", "apr")) == ("auto_loan",)
+    assert products_for_intent(intent("certificate", "apy")) == ("certificate",)
+    assert products_for_intent(Intent("prose", None, None, {}, None, "", "c")) == ()
+
+
+def test_certificate_list_selects_complete_inventory():
+    keys = cert_inventory()
+    st = build([obs(k, f"{i}.00%") for i, k in enumerate(keys)])
+    res = resolve_snapshot(st, "s5")
+    got = {r.fact_key for r in select_for_intent(cert_intent("all"), res)}
+    assert got == set(keys) and len(got) == 2 * (8 + 4)
+    assert {r.fact_key for r in select_for_intent(cert_intent("regular"), res)} == {k for k in keys if k.startswith("certificate|")}
+    assert {r.fact_key for r in select_for_intent(cert_intent("special"), res)} == {k for k in keys if k.startswith("certificate_special|")}
+    assert {r.fact_key for r in matching(cert_intent("all"), res)} == set(keys)
+
+
+def test_certificate_scope_preserves_filters():
+    keys = cert_inventory(("apy", "rate"))
+    st = build([obs(k, f"{i}.00%") for i, k in enumerate(keys)])
+    res = resolve_snapshot(st, "s5")
+
+    def sel(scope, attribute="apy", **q):
+        return {r.fact_key for r in select_for_intent(cert_intent(scope, attribute, q), res)}
+
+    assert sel("all", term="12") == {f"certificate|apy|segment={s};term=12" for s in ("personal", "business")}
+    assert sel("all", term="10", segment="business") == {
+        "certificate_special|apy|segment=business;term=10;tier=1000-99999.99",
+        "certificate_special|apy|kind=jumbo;segment=business;term=10;tier=100000-inf"}
+    assert sel("all", tier="150000") == {k for k in keys if "apy|" in k and "kind=jumbo" in k}
+    assert sel("all", segment="personal") == {k for k in keys if "apy|" in k and "segment=personal" in k}
+    assert sel("all", attribute="rate") == {k for k in keys if "|rate|" in k}
+    assert sel("special", term="17") == {k for k in keys if "special|apy|" in k and "term=17" in k}
+    assert sel("regular", kind="jumbo") == set()
+    assert sel("special") == {k for k in keys if "special|apy|" in k}
+    # generic rate (attribute None) still covers apy + rate for the whole scope
+    generic = {r.fact_key for r in select_for_intent(cert_intent("all", None), res)}
+    assert generic == set(keys)
+
+
+def test_vto_reporting_years_resolve_independently():
+    k23, k24 = "org|count|what=vto-employees;year=2023", "org|count|what=vto-employees;year=2024"
+    st = build([obs(k23, "294", url="https://x/news-2023", ptype="news", page_date="2024-01-10"),
+                obs(k24, "256", url="https://x/news-2024", ptype="news", page_date="2025-02-05")])
+    res = {r.fact_key: r for r in resolve_snapshot(st, "s5")}
+    assert res[k23].value == "294" and res[k24].value == "256"
+    assert not res[k23].losers and not res[k24].losers

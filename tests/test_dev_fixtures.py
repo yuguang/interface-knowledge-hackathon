@@ -14,7 +14,8 @@ DEV = ROOT / "dev"
 PUBLIC = ROOT / "eval" / "public_eval.jsonl"
 EVAL_KEYS = {"id", "question", "as_of", "expected_answer", "must_include", "must_not_include",
              "category", "difficulty", "weight", "expected_sources", "group"}
-FIXTURES = ["paraphrase_eval.jsonl", "asof_eval.jsonl", "refusal_eval.jsonl"]
+FIXTURES = ["paraphrase_eval.jsonl", "asof_eval.jsonl", "refusal_eval.jsonl",
+            "completeness_temporal_eval.jsonl"]
 SNAP_IDS = ["01_2026-05-12_baseline", "02_2026-05-19_recrawl", "03_2026-06-09_recrawl",
             "04_2026-08-27_rebaseline", "05_2026-09-28_latest"]
 
@@ -86,6 +87,42 @@ def test_refusal_shape():
     refuse = [it for it in items if it["category"] == "should_refuse"]
     answer = [it for it in items if it["category"] != "should_refuse"]
     assert len(refuse) == 13 and len(answer) == 12  # 10 look-alikes + solar/wedding (real answers)
+
+
+def _ct() -> dict[str, dict]:
+    return {it["id"]: it for it in _jsonl(DEV / "completeness_temporal_eval.jsonl")}
+
+
+def test_completeness_temporal_annual_vto():
+    """Annual VTO cases: explicit years map to their own count, the other year is a trap, and
+    unavailable years are refusals (empty must_include), not zero-token answers."""
+    ct = _ct()
+    assert ct["ct-vto-2023"]["must_include"] == ["294"] and "256" in ct["ct-vto-2023"]["must_not_include"]
+    assert ct["ct-vto-2024"]["must_include"] == ["256"] and "294" in ct["ct-vto-2024"]["must_not_include"]
+    assert ct["ct-vto-latest"]["must_include"] == ["256"] and "294" in ct["ct-vto-latest"]["must_not_include"]
+    for i in ("ct-vto-2025", "ct-vto-last-year"):
+        assert ct[i]["category"] == "should_refuse" and ct[i]["must_include"] == []
+        assert ct[i]["must_not_include"] == []
+
+
+def test_completeness_temporal_certificates_distinguish_tiers():
+    ct = _ct()
+    inv = ct["ct-cert-inventory"]
+    # inventory must carry several distinct terms, not one coincidental number
+    assert len(inv["must_include"]) >= 5 and inv["category"] == "list_completeness"
+    assert any("Which certificate term" in t for t in inv["must_not_include"])
+    tier = ct["ct-cert-17-tiers"]
+    # special and jumbo rates AND their minimums are separately required
+    assert {"4.10%", "4.20%", "$1,000", "$100,000"} <= set(tier["must_include"])
+    jumbo = ct["ct-cert-10-jumbo-current"]
+    assert jumbo["must_include"] == ["4.00%"] and jumbo["must_not_include"] == ["3.90%"]
+
+
+def test_completeness_temporal_no_wrong_year_in_expected():
+    for it in _ct().values():
+        if it["category"] == "should_refuse":
+            continue
+        assert it["weight"] > 0 and it["expected_answer"]
 
 
 def test_conflicts_gold_valid():

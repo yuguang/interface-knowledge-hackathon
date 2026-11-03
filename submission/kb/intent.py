@@ -56,6 +56,10 @@ _ATTR_WORDS = re.compile(r"\b(rates?|aprs?|apys?|yield|dividends?|hours|address|
 _GREETING = re.compile(r"^\s*(?:(?:hi|hello|hey|howdy|good (?:morning|afternoon|evening)|thanks|thank you)\b"
                        r"(?:\s+(?:there|dupaco))?\s*[,!.:-]*\s*)+", re.I)
 
+# "How many (Dupaco) employees used Volunteer Time Off / VTO": the annual VTO employee count (org|count|what=vto-employees)
+_VTO_COUNT = re.compile(r"(?:\bhow many\b|\bnumber of\b)(?:\s+\w+){0,3}?\s+employees\b[^?]*\b(?:used|use|took|take|taken|takes|participated|utili[sz]ed|utili[sz]e)\b")
+_VTO_NAME = re.compile(r"\bvolunteer time off\b|\bvto\b")
+
 _GENERIC_RATE = "rate*"  # internal marker; never leaves parse()
 
 _NAME_STOP = {"the", "what", "is", "are", "dupaco", "dupaco's", "a", "an", "of", "for", "your", "our", "which",
@@ -77,10 +81,36 @@ def _amount(num: str) -> str:
     return str(int(v))
 
 
+_REGULAR = re.compile(r"\b(?:regular|standard|traditional|non-?special)\b")
+_SPECIAL = re.compile(r"(?<!non-)(?<!non)\bspecials?\b")
+
+
+_ALSO_SPECIAL = re.compile(r"\b(?:including|include|includes|and|plus|with|as well as)\s+(?:the\s+|any\s+|your\s+)?(?<!non-)specials?\b")
+
+
+def _mixed_certificate(low: str) -> bool:
+    """Regular AND special asked together ("regular and special CDs", "certificate rates, including specials")."""
+    if not re.search(_CERT, low) or not _SPECIAL.search(low):
+        return False
+    return bool(_REGULAR.search(low) or _ALSO_SPECIAL.search(low))
+
+
+def _certificate_scope(low: str, product: str, family: str, quals: dict[str, str]) -> Optional[str]:
+    """Which certificate products a list request spans: generic CDs -> all, "regular" -> regular, "special" ->
+    special. Named-term (or other single-account) requests carry no scope."""
+    if product not in ("certificate", "certificate_special") or family != "list" or "term" in quals:
+        return None
+    if _mixed_certificate(low):
+        return "all"
+    if _SPECIAL.search(low):
+        return "special"
+    return "regular" if _REGULAR.search(low) else "all"
+
+
 def _find_product(low: str) -> Optional[str]:
     # "special" turns a certificate into a certificate special
-    if re.search(_CERT, low) and re.search(r"\bspecials?\b", low):
-        return "certificate_special"
+    if re.search(_CERT, low) and _SPECIAL.search(low):
+        return "certificate" if _mixed_certificate(low) else "certificate_special"
     for name, pat in _PRODUCTS:
         if re.search(pat, low):
             return name
@@ -243,7 +273,12 @@ def _safe(quals: dict[str, str]) -> dict[str, str]:
     return out
 
 
-def _canonical(family: str, product, attribute, quals, superlative, low: str) -> str:
+def _canonical(family: str, product, attribute, quals, superlative, low: str, scope: Optional[str] = None) -> str:
+    base = _canonical_base(family, product, attribute, quals, superlative, low)
+    return base + "|scope=" + scope if scope else base
+
+
+def _canonical_base(family: str, product, attribute, quals, superlative, low: str) -> str:
     if family == "prose" or not product or not attribute:
         return "prose|" + " ".join(_content_words(low))
     if attribute == _GENERIC_RATE:
@@ -284,6 +319,11 @@ def parse(question: str, llm: Optional[LLM] = None) -> Intent:
     q = cleaned
     low = q.lower()
 
+    if _VTO_COUNT.search(low) and _VTO_NAME.search(low):  # deterministic, ahead of any LLM label (dup-088)
+        quals = {"what": "vto-employees"}
+        return Intent("fact", "org", "count", quals, None, cleaned,
+                      _canonical("fact", "org", "count", quals, None, low))
+
     attribute, forced = _attribute(low)
     product = _find_product(low)
     name = None
@@ -323,10 +363,12 @@ def parse(question: str, llm: Optional[LLM] = None) -> Intent:
     quals = _safe(_qualifiers(q, low, product, name, attribute))
     plural = re.search(r"credit cards|certificates\b|\bcds\b|branches|\btiers\b", low) and attribute != "count"
     # A bare certificate/CD rate question (no term named) wants every term read back, not one account's rate.
-    cert_all = (product in ("certificate", "certificate_special") and attribute == _GENERIC_RATE
+    cert_all = (product in ("certificate", "certificate_special") and (attribute == _GENERIC_RATE
+                            or attribute in ("apy", "rate") and re.search(r"\bapys\b|\brates\b|\byields\b", low))
                 and "term" not in quals)
     family = "list" if (re.search(r"\b(all|list|every)\b", low) or re.search(r"\bany\b.*\btiers?\b", low)
                         or re.search(r"\b(which|what)\b.*\b(offer|have)\b", low) or plural or cert_all) else "fact"
-    canonical = _canonical(family, product, attribute, quals, superlative, low)
+    scope = _certificate_scope(low, product, family, quals)
+    canonical = _canonical(family, product, attribute, quals, superlative, low, scope)
     return Intent(family, product, None if attribute == _GENERIC_RATE else attribute, quals, superlative, cleaned,
-                  canonical)
+                  canonical, scope)
