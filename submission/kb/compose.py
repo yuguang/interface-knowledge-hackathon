@@ -10,7 +10,8 @@ from scoring import _numbers
 from . import tracing
 from .keys import parse_key
 from .llm import SONNET, LLM
-from .model import Hit, Intent, ResolvedFact
+from .model import AUTHORITY, Hit, Intent, ResolvedFact
+from .store import page_key
 
 _REFUSAL = "That isn't listed on the website, so I can't confirm it. Please contact Dupaco directly for this information."
 
@@ -196,6 +197,33 @@ def _lines(selected: list[ResolvedFact]) -> list[str]:
     return out
 
 
+def _topic_stems(text: str) -> set[str]:
+    """Word stems for topical fit: plural "s" dropped ("loans" == "loan"), then cut to 5 letters."""
+    words = re.findall(r"[a-z]{3,}", text.lower())
+    return {(w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w)[:5] for w in words}
+
+
+def _extra_sources(question: str, selected: list[ResolvedFact], cited: set[str], limit: int = 2) -> list[Source]:
+    """Other current pages showing the same value as a cited fact. Ranked by topical fit (stems shared with the
+    question and product), authority, then focus (fewest path stems the question doesn't mention), url.
+    Only pages at least as trusted as `other`; one citation per page however its URL is spelled."""
+    taken = {page_key(u) for u in cited}
+    best: dict[str, tuple] = {}
+    for r in selected:
+        want = _topic_stems(f"{question} {parse_key(r.fact_key)[0].replace('_', ' ')}")
+        for o in r.agreeing:
+            key = page_key(o.url)
+            if (key in taken or o.authority < AUTHORITY["other"] or o.snapshot_id != r.winner.snapshot_id
+                    or o.value_norm != r.value):
+                continue
+            have = _topic_stems(o.url.split("://", 1)[-1].split("/", 1)[-1])
+            rank = (-len(want & have), -o.authority, len(have - want), o.url)
+            if key not in best or rank < best[key][0]:
+                best[key] = (rank, o)
+    picked = sorted(best.values(), key=lambda x: x[0])[:limit]
+    return [Source(o.url, o.snapshot_id, (o.quote or "")[:200]) for _, o in picked]
+
+
 @tracing.traced("kb.render_facts", "tool")
 def render_facts(question: str, intent: Intent, selected: list[ResolvedFact], snapshot_id: str) -> Answer:
     text = "\n".join(_lines(selected))
@@ -204,6 +232,7 @@ def render_facts(question: str, intent: Intent, selected: list[ResolvedFact], sn
         if r.winner.url not in seen:
             seen.add(r.winner.url)
             sources.append(Source(r.winner.url, r.winner.snapshot_id, r.winner.quote))
+    sources += _extra_sources(question, selected, seen)
     notes = []
     for r in selected:
         others = list(dict.fromkeys(o.value_norm for o in r.losers if o.value_norm != r.value))

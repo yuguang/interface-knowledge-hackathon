@@ -31,6 +31,23 @@ def intent(product=None, attribute=None, q=None, family="fact", sup=None):
 K = "auto_loan|apr|model_year=2023-2026"
 
 
+def test_pick_records_agreeing_observations():
+    st = build([obs(K, "5.39%", url="https://x/rates"),
+                obs(K, "5.39%", url="https://x/auto-loans", ptype="product"),
+                obs(K, "5.39%", url="https://x/blog/post", ptype="blog"),
+                obs(K, "5.34%", url="https://x/calc", ptype="calculator")])
+    [r] = resolve_snapshot(st, "s5")
+    assert r.winner.url == "https://x/rates"
+    assert sorted(o.url for o in r.agreeing) == ["https://x/auto-loans", "https://x/blog/post"]
+    assert [l.value_norm for l in r.losers] == ["5.34%"]
+
+
+def test_pick_agreeing_excludes_winner_url():
+    st = build([obs(K, "5.39%", url="https://x/rates"), obs(K, "5.39%", url="https://x/rates", quote="again")])
+    [r] = resolve_snapshot(st, "s5")
+    assert r.agreeing == []
+
+
 def test_calculator_loses():
     st = build([obs(K, "5.39%", url="https://x/rates"), obs(K, "5.34%", url="https://x/calc", ptype="calculator")])
     [r] = resolve_snapshot(st, "s5")

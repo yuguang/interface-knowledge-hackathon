@@ -1,3 +1,7 @@
+import json
+import sqlite3
+from dataclasses import asdict
+
 from conftest import mini_snapshots
 from kb.model import Chunk, chunk_hash, FactObs, PageInfo, ResolvedFact
 from kb.store import Store
@@ -74,6 +78,36 @@ def test_resolved_roundtrip():
     assert st.resolved(S1, "mortgage_fixed") == [] and st.resolved(S2) == []
     st.set_resolved(S1, [])
     assert st.resolved(S1) == []
+
+
+def test_resolved_roundtrip_keeps_agreeing():
+    st = store2()
+    w, a = obs(), obs(url="u3", page_type="rate_sheet", authority=100)
+    st.set_resolved(S1, [ResolvedFact(w.fact_key, w.value_norm, w, [], "single source", [a])])
+    [r] = st.resolved(S1)
+    assert r.agreeing == [a]
+
+
+def test_resolved_legacy_row_without_agreeing(tmp_path):
+    db = tmp_path / "old.sqlite"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE fact_resolved (fact_key TEXT, snapshot_id TEXT, value_norm TEXT, obs_id INTEGER, "
+                "losers_json TEXT, winner_json TEXT, rule TEXT, PRIMARY KEY (fact_key, snapshot_id))")
+    w = obs()
+    con.execute("INSERT INTO fact_resolved VALUES (?,?,?,NULL,'[]',?,?)",
+                (w.fact_key, S1, w.value_norm, json.dumps(asdict(w)), "single source"))
+    con.commit()
+    con.close()
+    [r] = Store(str(db)).resolved(S1)
+    assert r.agreeing == [] and r.winner == w
+
+
+def test_set_resolved_clears_memo_for_snapshot():
+    st = store2()
+    st.memo_put("k", S1, {"text": "old"})
+    st.memo_put("k", S2, {"text": "keep"})
+    st.set_resolved(S1, [])
+    assert st.memo_get("k", S1) is None and st.memo_get("k", S2) == {"text": "keep"}
 
 
 def test_memo_roundtrip():

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 PAGE_TYPES = ("rate_sheet", "product", "branch", "disclosure", "other", "calculator", "promo", "blog", "news", "legacy")
@@ -82,6 +82,8 @@ class ResolvedFact:
     winner: FactObs
     losers: list[FactObs]
     rule: str
+    # live observations of the same value on other pages (unfiltered; compose picks which to cite)
+    agreeing: list[FactObs] = field(default_factory=list)
 
 
 # Unhashable despite frozen=True: has dict/list fields. Don't put instances in sets, use them as dict keys,

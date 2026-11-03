@@ -78,13 +78,14 @@ def _pick(key: str, live: list[FactObs], first_seen: dict[str, str]) -> Resolved
     cands = sorted(cands, key=lambda o: o.url)
     winner = cands[0]
     losers = [o for o in live if o.value_norm != winner.value_norm]
+    agreeing = [o for o in live if o.value_norm == winner.value_norm and o.url != winner.url]
     if len(_values(cands)) > 1:
         rule = "tie: higher authority"
     elif collapsed == "authority" or (collapsed is None and losers):  # None+losers: step 5 decided
         rule = f"authority:{winner.page_type} over {max(losers, key=lambda o: o.authority).page_type}"
     else:
         rule = collapsed or "single source"
-    return ResolvedFact(key, winner.value_norm, winner, losers, rule)
+    return ResolvedFact(key, winner.value_norm, winner, losers, rule, agreeing)
 
 
 def resolve_snapshot(store: Store, snapshot_id: str) -> list[ResolvedFact]:

@@ -33,7 +33,7 @@ CREATE INDEX IF NOT EXISTS fo_key_snap ON fact_obs(fact_key, snapshot_id);
 CREATE INDEX IF NOT EXISTS fo_prod_attr ON fact_obs(product, attribute, snapshot_id);
 CREATE TABLE IF NOT EXISTS fact_resolved (
   fact_key TEXT, snapshot_id TEXT, value_norm TEXT, obs_id INTEGER, losers_json TEXT,
-  winner_json TEXT, rule TEXT,
+  winner_json TEXT, rule TEXT, agreeing_json TEXT,
   PRIMARY KEY (fact_key, snapshot_id));
 CREATE TABLE IF NOT EXISTS page_link (
   snapshot_id TEXT, url TEXT, ord INTEGER, text TEXT, href TEXT, PRIMARY KEY (snapshot_id, url, text, href));
@@ -50,11 +50,21 @@ def _obs_from_row(r) -> FactObs:
     return FactObs(qualifiers=json.loads(r["qualifiers_json"]), **d)
 
 
+def page_key(url: str) -> str:
+    """One page's identity across URL spellings: host + path, lowercased, no trailing slash."""
+    sp = urlsplit(url)
+    return (sp.netloc + sp.path).lower().rstrip("/")
+
+
 class Store:
     def __init__(self, path: str = ":memory:"):
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._db.executescript(_SCHEMA)
+        # stores created before agreeing_json existed: CREATE TABLE IF NOT EXISTS leaves the old table as it was
+        if "agreeing_json" not in {r[1] for r in self._db.execute("PRAGMA table_info(fact_resolved)")}:
+            self._db.execute("ALTER TABLE fact_resolved ADD COLUMN agreeing_json TEXT")
+            self._db.commit()
         try:
             self._db.execute('CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts '
                              'USING fts5(text, tokenize="porter unicode61")')
@@ -69,8 +79,7 @@ class Store:
         self._db.commit()
 
     def add_page(self, snapshot_id: str, url: str, title: str, info: PageInfo, content_hash: str) -> int:
-        sp = urlsplit(url)
-        url_key = (sp.netloc + sp.path).lower().rstrip("/")
+        url_key = page_key(url)
         self._db.execute(
             "INSERT INTO page (snapshot_id,url,url_key,title,page_type,authority,page_date,content_hash) "
             "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(snapshot_id,url) DO UPDATE SET "
@@ -190,11 +199,13 @@ class Store:
 
     def set_resolved(self, snapshot_id: str, resolved: list[ResolvedFact]) -> None:
         self._db.execute("DELETE FROM fact_resolved WHERE snapshot_id=?", (snapshot_id,))
+        # answers memoised for this snapshot were composed from the previous resolution
+        self._db.execute("DELETE FROM answer_memo WHERE snapshot_id=?", (snapshot_id,))
         self._db.executemany(
-            "INSERT INTO fact_resolved (fact_key,snapshot_id,value_norm,obs_id,losers_json,winner_json,rule) "
-            "VALUES (?,?,?,NULL,?,?,?)",
+            "INSERT INTO fact_resolved (fact_key,snapshot_id,value_norm,obs_id,losers_json,winner_json,rule,"
+            "agreeing_json) VALUES (?,?,?,NULL,?,?,?,?)",
             [(r.fact_key, snapshot_id, r.value, json.dumps([asdict(l) for l in r.losers]),
-              json.dumps(asdict(r.winner)), r.rule) for r in resolved])
+              json.dumps(asdict(r.winner)), r.rule, json.dumps([asdict(o) for o in r.agreeing])) for r in resolved])
         self._db.commit()
 
     def resolved(self, snapshot_id: str, product: Optional[str] = None,
@@ -205,7 +216,8 @@ class Store:
             if (product is not None and p != product) or (attribute is not None and a != attribute):
                 continue
             out.append(ResolvedFact(r["fact_key"], r["value_norm"], FactObs(**json.loads(r["winner_json"])),
-                                    [FactObs(**d) for d in json.loads(r["losers_json"])], r["rule"]))
+                                    [FactObs(**d) for d in json.loads(r["losers_json"])], r["rule"],
+                                    [FactObs(**d) for d in json.loads(r["agreeing_json"] or "[]")]))
         return out
 
     # memo

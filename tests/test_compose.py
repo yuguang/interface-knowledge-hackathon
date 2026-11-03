@@ -4,20 +4,21 @@ from scoring import REFUSAL_RE, _numbers, contains
 
 from kb import compose
 from kb.compose import refusal, render_facts, render_prose, sanitize
-from kb.model import FactObs, Hit, Intent, ResolvedFact
+from kb.model import AUTHORITY, FactObs, Hit, Intent, ResolvedFact
 
 SID = "05_2026-09-28_latest"
 KEY = "auto_loan|apr|model_year=2024-2027;segment=personal;term=60"
 
 
-def obs(value, key=KEY, url="https://www.dupaco.com/rates", page_type="rate_sheet", quote="q"):
+def obs(value, key=KEY, url="https://www.dupaco.com/rates", page_type="rate_sheet", quote="q", authority=None):
     p, a, qs = key.split("|", 2)
-    return FactObs(key, p, a, {}, value, value, SID, "2026-09-28", url, page_type, 100, None, quote, "table")
+    auth = AUTHORITY[page_type] if authority is None else authority
+    return FactObs(key, p, a, {}, value, value, SID, "2026-09-28", url, page_type, auth, None, quote, "table")
 
 
-def rf(value, key=KEY, losers=(), url="https://www.dupaco.com/rates"):
+def rf(value, key=KEY, losers=(), url="https://www.dupaco.com/rates", agreeing=()):
     return ResolvedFact(key, value, obs(value, key, url), [obs(v, key, "https://www.dupaco.com/old", "blog") for v in losers],
-                        "authority")
+                        "authority", list(agreeing))
 
 
 def intent(family="fact"):
@@ -362,3 +363,72 @@ def test_vto_count_template():
 def test_other_count_template_unchanged():
     a = render_facts("q", intent(), [rf("12", "org|count|what=branches")], SID)
     assert a.text == "The Dupaco count for branches is 12."
+
+
+AUTO = "https://www.dupaco.com/personal/loans/auto-motorcycle-loans"
+
+
+def test_extra_source_added_after_rate_sheet():
+    a = render_facts("What's the APR for a 60-month auto loan?", intent(),
+                     [rf("5.39%", agreeing=[obs("5.39%", url=AUTO, page_type="product")])], SID)
+    assert [s.url for s in a.sources] == ["https://www.dupaco.com/rates", AUTO]
+    assert a.text == "The 60-month APR for 2024-2027 model-year vehicles is as low as 5.39% APR."
+    assert a.conflict_note is None
+
+
+def test_extra_sources_exclude_low_authority_pages():
+    bad = [obs("5.39%", url=f"https://www.dupaco.com/{t}", page_type=t)
+           for t in ("blog", "news", "legacy", "promo", "calculator")]
+    a = render_facts("q", intent(), [rf("5.39%", agreeing=bad)], SID)
+    assert [s.url for s in a.sources] == ["https://www.dupaco.com/rates"]
+
+
+def test_extra_sources_ranked_by_topic_then_authority():
+    ag = [obs("5.39%", url="https://www.dupaco.com/contact", page_type="branch"),
+          obs("5.39%", url="https://www.dupaco.com/business/cash-management", page_type="product"),
+          obs("5.39%", url=AUTO, page_type="product")]
+    a = render_facts("auto loan APR", intent(), [rf("5.39%", agreeing=ag)], SID)
+    assert [s.url for s in a.sources][1:] == [AUTO, "https://www.dupaco.com/business/cash-management"]
+
+
+def test_extra_sources_capped_across_facts():
+    k2 = "auto_loan|apr|model_year=2024-2027;segment=personal;term=72"
+    ag = lambda v, k: [obs(v, k, url=f"https://www.dupaco.com/p{i}", page_type="product") for i in range(3)]
+    a = render_facts("q", intent("list"), [rf("5.39%", agreeing=ag("5.39%", KEY)),
+                                           rf("5.49%", k2, agreeing=ag("5.49%", k2))], SID)
+    assert len(a.sources) == 3  # 1 winner URL + 2 extras
+
+
+def test_extra_sources_dedupe_urls():
+    ag = [obs("5.39%", url=AUTO, page_type="product"), obs("5.39%", url=AUTO, page_type="product", quote="again"),
+          obs("5.39%", url="https://www.dupaco.com/rates")]
+    a = render_facts("q", intent(), [rf("5.39%", agreeing=ag)], SID)
+    assert [s.url for s in a.sources] == ["https://www.dupaco.com/rates", AUTO]
+
+
+def test_extra_sources_same_snapshot_same_value_only():
+    old = FactObs(KEY, "auto_loan", "apr", {}, "5.39%", "5.39%", "04_2026-08-27_rebaseline", "2026-08-27",
+                  AUTO, "product", 80, None, "q", "table")
+    other_value = obs("5.34%", url="https://www.dupaco.com/business/cash-management", page_type="product")
+    a = render_facts("q", intent(), [rf("5.39%", agreeing=[old, other_value])], SID)
+    assert [s.url for s in a.sources] == ["https://www.dupaco.com/rates"]
+
+
+def test_extra_sources_topic_fit_ignores_plurals_and_prefers_focused_pages():
+    base = "https://www.dupaco.com/personal/loans/"
+    ag = [obs("5.39%", url=base + "home-improvement-loan/", page_type="product"),
+          obs("5.39%", url=base + "home-loans", page_type="product"),
+          obs("5.39%", url=base + "loan-protection", page_type="product")]
+    a = render_facts("What's the rate on a home loan?", intent(), [rf("5.39%", agreeing=ag)], SID)
+    assert [s.url for s in a.sources][1:] == [base + "home-loans", base + "home-improvement-loan/"]
+
+
+def test_extra_sources_dedupe_url_variants_of_one_page():
+    ag = [obs("5.39%", url="https://www.dupaco.com/rates/", page_type="product"),
+          obs("5.39%", url=AUTO + "/", page_type="product"),
+          obs("5.39%", url=AUTO.replace("auto-motorcycle", "Auto-Motorcycle"), page_type="product"),
+          obs("5.39%", url="https://www.dupaco.com/contact", page_type="branch")]
+    a = render_facts("q", intent(), [rf("5.39%", agreeing=ag)], SID)
+    urls = [s.url for s in a.sources]
+    assert urls[0] == "https://www.dupaco.com/rates" and len(urls) == 3
+    assert urls[2] == "https://www.dupaco.com/contact"
