@@ -1,6 +1,6 @@
-# A knowledge system that knows what's true now
+# Source-backed answers, built for changing facts
 
-This system answers questions about a credit union's website from five crawled snapshots. It gives the
+This system answers questions based on a credit union's website from five crawled snapshots. It gives the
 current value, the right tier, a source, and an honest "isn't listed" when the site doesn't say.
 
 - The solution is in **`submission/`** (`submission/solution.py` → `build()`).
@@ -73,6 +73,38 @@ Latest local scores (`dev/scores.csv`, public eval with `--judge`):
 - Final score 0.787, which includes the conflicts pillar scored against our dev gold. This is from a
   local run's `results/` report, which is not committed; `dev/scores.csv` has no final-score column.
 - p95 latency 3.11 s.
+
+## Latest public-eval comparison
+
+The submission was rerun on 2026-11-03 against the same 40 questions in `eval/public_eval.jsonl`,
+without the optional `--judge` or `--conflicts-gold` flags. The starter results are from the earlier
+2026-11-02 session and were not rerun. The submission rebuilt its fact store and search index using
+the existing local LLM-response cache; these are not cold-start measurements.
+
+| Metric | `starter/` | `submission/` |
+|---|---|---|
+| Accuracy | 0.093 | 0.9411 |
+| Tier disambiguation | 0.00 | 1.00 |
+| Stale traps | 0.14 | 1.00 |
+| Final score | 0.093 | 0.9411 |
+| p95 answer latency | 0.33 s | 0.21 s |
+| Ingest time | ~0 s | 420.5 s |
+| Errors | 0 | 0 |
+
+Both runs reported 0 forbidden-value trap hits and paraphrase and repeat consistency of 1.0.
+The submission is substantially more accurate, at the cost of ingest time. Its final score equals its
+accuracy because p95 latency (0.21 s, with the existing LLM-response cache) is under the harness's 2 s
+threshold for full speed credit. The submission improved from 0.9271 to 0.9411 as four citation
+mismatches (mortgage rates, both auto-loan questions, and routing number) received full credit.
+Remaining deductions are the general lobby-hours source mismatch, the unjudged certificate-list
+scoring limitation, and the VTO reporting-year/reference disagreement described in
+[`submission/NOTES.md`](submission/NOTES.md#certificate-scope-and-reporting-year-policy).
+
+The submission report is `results/rerun-20261103T224246Z/public/report.json`; the starter report is in the timestamped
+`results/starter-rerun-*` directory from the earlier session.
+These local artifacts are not committed. These results are not directly comparable to the older
+judge-enabled run in [`submission/NOTES.md`](submission/NOTES.md#current-scores-local-devscorescsv),
+which also included the conflicts pillar scored against dev gold.
 
 ## Repository layout
 
